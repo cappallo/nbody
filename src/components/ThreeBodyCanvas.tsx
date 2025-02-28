@@ -312,6 +312,9 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
     const defaultConfig: ThreeBodyConfig = {
       G: 1000, // Gravitational constant
       dt: 0.03, // Time step
+      speedMultiplier: 1.0, // Speed multiplier
+      useAdaptiveTimeStep: true, // Enable adaptive time stepping
+      maxPositionChangeRatio: 0.01, // Max position change ratio
       canvasWidth: canvasDimensions.width,
       canvasHeight: canvasDimensions.height,
       maxTrailLength: 500, // Long trail length
@@ -415,6 +418,21 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
     if (config.maxTrailLength !== undefined) {
       systemRef.current.config.maxTrailLength = config.maxTrailLength;
     }
+
+    // Update speed multiplier
+    if (config.speedMultiplier !== undefined) {
+      systemRef.current.setSpeedMultiplier(config.speedMultiplier);
+    }
+
+    // Update adaptive time stepping
+    if (config.useAdaptiveTimeStep !== undefined) {
+      systemRef.current.setAdaptiveTimeStep(config.useAdaptiveTimeStep);
+    }
+
+    // Update position change ratio if it exists
+    if (config.maxPositionChangeRatio !== undefined) {
+      systemRef.current.config.maxPositionChangeRatio = config.maxPositionChangeRatio;
+    }
   }, [config, onReset]);
 
   // Sync the showGridRef with showGrid state
@@ -449,9 +467,35 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
         return;
       }
 
+      // Get the speed multiplier from the simulation config
+      const speedMultiplier = systemRef.current.config.speedMultiplier || 1.0;
+
       // Update the simulation if it's running
       if (systemRef.current.isRunning()) {
-        systemRef.current.update();
+        // For speed values ≥ 1.0, do multiple updates per frame
+        if (speedMultiplier >= 1.0) {
+          // Calculate whole number of updates
+          const wholeUpdates = Math.floor(speedMultiplier);
+
+          // Handle the fractional part probabilistically
+          const fractionalPart = speedMultiplier - wholeUpdates;
+          const doExtraUpdate = Math.random() < fractionalPart;
+
+          // Perform updates
+          const totalUpdates = wholeUpdates + (doExtraUpdate ? 1 : 0);
+
+          for (let i = 0; i < totalUpdates; i++) {
+            systemRef.current.update();
+          }
+        }
+        // For slow motion (speed < 1.0), skip frames
+        else {
+          // Use accumulator to track partial updates
+          const shouldUpdate = Math.random() < speedMultiplier;
+          if (shouldUpdate) {
+            systemRef.current.update();
+          }
+        }
       }
 
       // Calculate FPS
@@ -607,6 +651,35 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
     ctx.fillText(`Auto-follow: ${currentCamera.autoFollow ? 'ON' : 'OFF'}`, 10, 20);
     ctx.fillText(`Zoom: ${Math.round(currentCamera.zoom * 100)}%`, 10, 40);
     ctx.fillText(`Grid: ${showGridRef.current ? 'ON' : 'OFF'}`, 10, 60);
+
+    // Get current stats
+    const bodies = systemRef.current.bodies;
+    const effectiveTimeStep = systemRef.current.getEffectiveTimeStep();
+    const speedMultiplier = systemRef.current.config.speedMultiplier;
+    const isAdaptive = systemRef.current.config.useAdaptiveTimeStep;
+
+    // Draw stats panel
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(10, 80, 200, isAdaptive ? 125 : 105);
+
+    ctx.font = '14px monospace';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+
+    // Draw stats in the panel
+    ctx.fillText(`FPS: ${fpsRef.current}`, 20, 90);
+    ctx.fillText(`Bodies: ${bodies.length}`, 20, 110);
+    ctx.fillText(`Speed: ${speedMultiplier.toFixed(1)}x`, 20, 130);
+    ctx.fillText(`dt: ${effectiveTimeStep.toFixed(5)}`, 20, 150);
+
+    if (isAdaptive) {
+      ctx.fillStyle = '#4CAF50';
+      ctx.fillText('Adaptive Time Step: ON', 20, 170);
+    } else {
+      ctx.fillStyle = '#FF5252';
+      ctx.fillText('Adaptive Time Step: OFF', 20, 170);
+    }
   };
 
   /**

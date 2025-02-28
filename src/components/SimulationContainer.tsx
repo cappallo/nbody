@@ -11,6 +11,8 @@ import {
   MenuItem,
   SelectChangeEvent,
   Stack,
+  Switch,
+  FormControlLabel,
 } from '@mui/material';
 import ThreeBodyCanvas from './ThreeBodyCanvas';
 import { ThreeBodyConfig } from '../physics/ThreeBodySystem';
@@ -32,6 +34,9 @@ const SimulationContainer: React.FC = () => {
   const [config, setConfig] = useState<Partial<ThreeBodyConfig>>({
     G: 1000,
     dt: 0.03,
+    speedMultiplier: 1.0,
+    useAdaptiveTimeStep: true,
+    maxPositionChangeRatio: 0.01,
     maxTrailLength: 500,
     numBodies: 3, // Default to 3 bodies
   });
@@ -57,6 +62,41 @@ const SimulationContainer: React.FC = () => {
     setConfig((prev) => ({
       ...prev,
       dt: value as number,
+    }));
+  };
+
+  /**
+   * Handle change of the speed multiplier
+   * @param event Change event
+   * @param value New value
+   */
+  const handleSpeedMultiplierChange = (_event: Event, value: number | number[]): void => {
+    setConfig((prev) => ({
+      ...prev,
+      speedMultiplier: value as number,
+    }));
+  };
+
+  /**
+   * Handle change of adaptive time stepping
+   * @param event Change event
+   */
+  const handleAdaptiveTimeStepChange = (_event: React.ChangeEvent<HTMLInputElement>): void => {
+    setConfig((prev) => ({
+      ...prev,
+      useAdaptiveTimeStep: _event.target.checked,
+    }));
+  };
+
+  /**
+   * Handle change of the position change ratio for adaptive time stepping
+   * @param event Change event
+   * @param value New value
+   */
+  const handlePositionChangeRatioChange = (_event: Event, value: number | number[]): void => {
+    setConfig((prev) => ({
+      ...prev,
+      maxPositionChangeRatio: value as number,
     }));
   };
 
@@ -190,6 +230,68 @@ const SimulationContainer: React.FC = () => {
           </Box>
 
           <Box>
+            <Typography id='speed-multiplier-slider' gutterBottom>
+              Speed Multiplier: {config.speedMultiplier?.toFixed(2)} x
+            </Typography>
+            <Typography variant='caption' sx={{ color: 'rgba(255, 255, 255, 0.7)', mb: 1, display: 'block' }}>
+              Controls animation speed without affecting physics behavior
+            </Typography>
+            <Slider
+              aria-labelledby='speed-multiplier-slider'
+              min={0.1}
+              max={5}
+              step={0.1}
+              value={config.speedMultiplier ?? 1.0}
+              onChange={handleSpeedMultiplierChange}
+              sx={{
+                color: '#2196F3',
+                '& .MuiSlider-thumb': {
+                  '&:hover, &.Mui-focusVisible': {
+                    boxShadow: '0px 0px 0px 8px rgba(33, 150, 243, 0.16)',
+                  },
+                },
+              }}
+            />
+          </Box>
+
+          <Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={config.useAdaptiveTimeStep ?? true}
+                  onChange={handleAdaptiveTimeStepChange}
+                  color='primary'
+                />
+              }
+              label='Adaptive Time Stepping'
+              sx={{ mb: 2 }}
+            />
+            {config.useAdaptiveTimeStep && (
+              <>
+                <Typography id='position-change-ratio-slider' gutterBottom>
+                  Max Position Change Ratio: {config.maxPositionChangeRatio?.toFixed(3)}
+                </Typography>
+                <Slider
+                  aria-labelledby='position-change-ratio-slider'
+                  min={0.001}
+                  max={0.05}
+                  step={0.001}
+                  value={config.maxPositionChangeRatio ?? 0.01}
+                  onChange={handlePositionChangeRatioChange}
+                  sx={{
+                    color: '#4CAF50',
+                    '& .MuiSlider-thumb': {
+                      '&:hover, &.Mui-focusVisible': {
+                        boxShadow: '0px 0px 0px 8px rgba(76, 175, 80, 0.16)',
+                      },
+                    },
+                  }}
+                />
+              </>
+            )}
+          </Box>
+
+          <Box>
             <Typography id='g-constant-slider' gutterBottom>
               Gravitational Constant: {config.G}
             </Typography>
@@ -213,7 +315,10 @@ const SimulationContainer: React.FC = () => {
 
           <Box>
             <Typography id='dt-slider' gutterBottom>
-              Time Step: {config.dt}
+              Base Time Step: {config.dt}
+            </Typography>
+            <Typography variant='caption' sx={{ color: 'rgba(255, 255, 255, 0.7)', mb: 1, display: 'block' }}>
+              Controls physics accuracy and stability
             </Typography>
             <Slider
               aria-labelledby='dt-slider'
@@ -250,15 +355,14 @@ const SimulationContainer: React.FC = () => {
                   borderColor: 'rgba(255, 255, 255, 0.5)',
                 },
                 '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                  borderColor: '#FE6B8B',
+                  borderColor: '#4caf50',
                 },
               }}
             >
-              <MenuItem value={0}>No Trail</MenuItem>
-              <MenuItem value={100}>Short</MenuItem>
-              <MenuItem value={250}>Medium</MenuItem>
-              <MenuItem value={500}>Long</MenuItem>
-              <MenuItem value={1000}>Very Long</MenuItem>
+              <MenuItem value='100'>Short (100)</MenuItem>
+              <MenuItem value='500'>Medium (500)</MenuItem>
+              <MenuItem value='1000'>Long (1000)</MenuItem>
+              <MenuItem value='2000'>Extra Long (5000)</MenuItem>
             </Select>
           </FormControl>
         </Stack>

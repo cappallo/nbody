@@ -22,8 +22,14 @@ export interface Body {
 export interface ThreeBodyConfig {
   /** Gravitational constant */
   G: number;
-  /** Time step for simulation */
+  /** Base time step for simulation */
   dt: number;
+  /** Speed multiplier (independent of time resolution) */
+  speedMultiplier: number;
+  /** Whether to use adaptive time stepping */
+  useAdaptiveTimeStep: boolean;
+  /** Maximum allowed position change ratio per step (for adaptive time stepping) */
+  maxPositionChangeRatio: number;
   /** Canvas dimensions */
   canvasWidth: number;
   /** Canvas height */
@@ -52,13 +58,23 @@ export class ThreeBodySystem {
   public config: ThreeBodyConfig;
   /** Flag to track if simulation is running */
   private running: boolean = false;
+  /** Effective time step after applying speed multiplier and adaptive calculations */
+  private effectiveTimeStep: number = 0;
 
   /**
    * Creates a new n-body system
    * @param config Configuration parameters
    */
   constructor(config: ThreeBodyConfig) {
-    this.config = config;
+    // Set default values for new parameters if not provided
+    this.config = {
+      ...config,
+      speedMultiplier: config.speedMultiplier ?? 1.0,
+      useAdaptiveTimeStep: config.useAdaptiveTimeStep ?? true,
+      maxPositionChangeRatio: config.maxPositionChangeRatio ?? 0.01,
+    };
+    // Initialize effective time step based only on dt (not speed)
+    this.effectiveTimeStep = this.config.dt;
     this.bodies = this.initializeRandomBodies();
   }
 
@@ -137,12 +153,72 @@ export class ThreeBodySystem {
   }
 
   /**
+   * Calculate the adaptive time step based on body velocities and positions
+   * @returns The calculated adaptive time step
+   */
+  private calculateAdaptiveTimeStep(): number {
+    if (!this.config.useAdaptiveTimeStep) {
+      return this.config.dt; // Use base time step without speed multiplier
+    }
+
+    const { maxPositionChangeRatio } = this.config;
+    const numBodies = this.bodies.length;
+    let maxVelocityMagnitude = 0;
+    let minDistance = Infinity;
+
+    // Find the maximum velocity magnitude and minimum distance between bodies
+    for (let i = 0; i < numBodies; i++) {
+      const body = this.bodies[i];
+      const [vx, vy] = body.velocity;
+      const velocityMagnitude = Math.sqrt(vx * vx + vy * vy);
+
+      if (velocityMagnitude > maxVelocityMagnitude) {
+        maxVelocityMagnitude = velocityMagnitude;
+      }
+
+      // Find minimum distance between bodies
+      for (let j = i + 1; j < numBodies; j++) {
+        const otherBody = this.bodies[j];
+        const [x1, y1] = body.position;
+        const [x2, y2] = otherBody.position;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < minDistance) {
+          minDistance = distance;
+        }
+      }
+    }
+
+    // Default to base time step if there's only one body or other edge cases
+    if (numBodies <= 1 || minDistance === Infinity || maxVelocityMagnitude === 0) {
+      return this.config.dt; // Use base time step without speed multiplier
+    }
+
+    // Calculate adaptive time step to ensure bodies don't move more than
+    // maxPositionChangeRatio * minDistance in a single time step
+    const maxAllowedChange = maxPositionChangeRatio * minDistance;
+    const adaptiveTimeStep = maxAllowedChange / maxVelocityMagnitude;
+
+    // Clamp the time step to avoid extremes
+    const baseTimeStep = this.config.dt; // Use base time step without speed multiplier
+    const maxTimeStep = baseTimeStep * 10;
+    const minTimeStep = baseTimeStep * 0.1;
+
+    return Math.min(Math.max(adaptiveTimeStep, minTimeStep), maxTimeStep);
+  }
+
+  /**
    * Update the system state by one time step
    */
   public update(): void {
     if (!this.running) return;
 
-    const { dt, maxTrailLength } = this.config;
+    // Calculate effective time step using adaptive algorithm (without speed multiplier)
+    this.effectiveTimeStep = this.calculateAdaptiveTimeStep();
+
+    const { maxTrailLength } = this.config;
     const numBodies = this.bodies.length;
     const forces: [number, number][] = Array(numBodies)
       .fill([0, 0])
@@ -164,12 +240,12 @@ export class ThreeBodySystem {
       const body = this.bodies[i];
 
       // Update velocity: v = v + F/m * dt
-      body.velocity[0] += (forces[i][0] / body.mass) * dt;
-      body.velocity[1] += (forces[i][1] / body.mass) * dt;
+      body.velocity[0] += (forces[i][0] / body.mass) * this.effectiveTimeStep;
+      body.velocity[1] += (forces[i][1] / body.mass) * this.effectiveTimeStep;
 
       // Update position: p = p + v * dt
-      body.position[0] += body.velocity[0] * dt;
-      body.position[1] += body.velocity[1] * dt;
+      body.position[0] += body.velocity[0] * this.effectiveTimeStep;
+      body.position[1] += body.velocity[1] * this.effectiveTimeStep;
 
       // Store position in trail for visualization
       body.trail.push([...body.position]);
@@ -177,6 +253,32 @@ export class ThreeBodySystem {
         body.trail.shift();
       }
     }
+  }
+
+  /**
+   * Get the current effective time step being used (after adjustments)
+   * @returns The effective time step
+   */
+  public getEffectiveTimeStep(): number {
+    return this.effectiveTimeStep;
+  }
+
+  /**
+   * Set the speed multiplier
+   * @param speedMultiplier New speed multiplier value
+   */
+  public setSpeedMultiplier(speedMultiplier: number): void {
+    if (speedMultiplier > 0) {
+      this.config.speedMultiplier = speedMultiplier;
+    }
+  }
+
+  /**
+   * Toggle adaptive time stepping
+   * @param useAdaptive Whether to use adaptive time stepping
+   */
+  public setAdaptiveTimeStep(useAdaptive: boolean): void {
+    this.config.useAdaptiveTimeStep = useAdaptive;
   }
 
   /**
