@@ -311,14 +311,14 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
     // Default configuration with reasonable values
     const defaultConfig: ThreeBodyConfig = {
       G: 1000, // Gravitational constant
-      dt: 0.02, // Time step
+      dt: 0.03, // Time step
       canvasWidth: canvasDimensions.width,
       canvasHeight: canvasDimensions.height,
-      maxTrailLength: 100, // Store 100 previous positions for trails
-      minMass: 100,
-      maxMass: 1000,
-      minVelocity: -20,
-      maxVelocity: 20,
+      maxTrailLength: 500, // Long trail length
+      minMass: 1.75,
+      maxMass: 3.75,
+      minVelocity: -50,
+      maxVelocity: 50,
       numBodies: 3, // Default to 3 bodies
     };
 

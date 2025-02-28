@@ -86,7 +86,7 @@ export class ThreeBodySystem {
       const y = canvasHeight / 2 + distance * Math.sin(angle);
 
       // Create a body with random properties
-      const mass = random(minMass, maxMass);
+      const mass = Math.pow(10, random(minMass, maxMass));
       const body: Body = {
         mass,
         position: [x, y],

@@ -31,8 +31,8 @@ const SimulationContainer: React.FC = () => {
   // Configuration state for the simulation
   const [config, setConfig] = useState<Partial<ThreeBodyConfig>>({
     G: 1000,
-    dt: 0.02,
-    maxTrailLength: 100,
+    dt: 0.03,
+    maxTrailLength: 500,
     numBodies: 3, // Default to 3 bodies
   });
 
@@ -220,7 +220,7 @@ const SimulationContainer: React.FC = () => {
               min={0.001}
               max={0.1}
               step={0.001}
-              value={config.dt ?? 0.02}
+              value={config.dt ?? 0.03}
               onChange={handleDtChange}
               sx={{
                 color: '#FF8E53',
