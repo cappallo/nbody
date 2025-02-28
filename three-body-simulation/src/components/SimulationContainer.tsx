@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box,
   Container,
@@ -19,11 +19,14 @@ import { ThreeBodyConfig } from '../physics/ThreeBodySystem';
  * Component that wraps the simulation canvas with controls and information
  */
 const SimulationContainer: React.FC = () => {
-  // State for canvas size - responsive by default
-  const [canvasSize, setCanvasSize] = useState({
-    width: Math.min(window.innerWidth - 40, 1000),
-    height: Math.min(window.innerHeight - 200, 700),
-  });
+  // Initial canvas size - use useMemo since we no longer need to update it
+  const canvasSize = useMemo(
+    () => ({
+      width: window.innerWidth - 40,
+      height: Math.min(window.innerHeight - 150, 800),
+    }),
+    []
+  );
 
   // Configuration state for the simulation
   const [config, setConfig] = useState<Partial<ThreeBodyConfig>>({
@@ -32,19 +35,6 @@ const SimulationContainer: React.FC = () => {
     maxTrailLength: 100,
     numBodies: 3, // Default to 3 bodies
   });
-
-  // Handle window resize for responsive canvas
-  React.useEffect(() => {
-    const handleResize = (): void => {
-      setCanvasSize({
-        width: Math.min(window.innerWidth - 40, 1000),
-        height: Math.min(window.innerHeight - 200, 700),
-      });
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   /**
    * Handle change of the gravitational constant
@@ -141,16 +131,23 @@ const SimulationContainer: React.FC = () => {
         </Typography>
       </Paper>
 
-      <Paper
-        elevation={3}
+      <Box
+        component='div'
         sx={{
-          mb: 4,
-          overflow: 'hidden',
+          flexGrow: 1,
+          width: '100%',
+          height: '50vh',
+          minHeight: '400px',
+          bgcolor: 'background.paper',
+          boxShadow: 3,
           borderRadius: 2,
+          position: 'relative',
+          mb: 2,
+          overflow: 'hidden',
         }}
       >
         <ThreeBodyCanvas width={canvasSize.width} height={canvasSize.height} config={config} onReset={handleReset} />
-      </Paper>
+      </Box>
 
       <Paper
         elevation={3}
@@ -221,7 +218,7 @@ const SimulationContainer: React.FC = () => {
             <Slider
               aria-labelledby='dt-slider'
               min={0.001}
-              max={0.05}
+              max={0.1}
               step={0.001}
               value={config.dt ?? 0.02}
               onChange={handleDtChange}
@@ -258,10 +255,10 @@ const SimulationContainer: React.FC = () => {
               }}
             >
               <MenuItem value={0}>No Trail</MenuItem>
-              <MenuItem value={50}>Short</MenuItem>
-              <MenuItem value={100}>Medium</MenuItem>
-              <MenuItem value={200}>Long</MenuItem>
-              <MenuItem value={500}>Very Long</MenuItem>
+              <MenuItem value={100}>Short</MenuItem>
+              <MenuItem value={250}>Medium</MenuItem>
+              <MenuItem value={500}>Long</MenuItem>
+              <MenuItem value={1000}>Very Long</MenuItem>
             </Select>
           </FormControl>
         </Stack>
