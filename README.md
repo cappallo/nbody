@@ -1,3 +1,5 @@
+(This was all built by Claude Sonnet 3.7, including the readme below.)
+
 # Three-Body Problem Simulation
 
 A modern web-based visualization of the three-body problem in classical mechanics, built with React, TypeScript, and Material UI.
@@ -37,7 +39,6 @@ This simulation uses numerical integration to approximate the solution, renderin
 
    ```
    git clone [repository-url]
-   cd three-body-simulation
    ```
 
 2. Install dependencies:
