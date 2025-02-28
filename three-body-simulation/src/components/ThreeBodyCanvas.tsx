@@ -11,17 +11,19 @@ interface ThreeBodyCanvasProps {
   height: number;
   /** Configuration options for simulation */
   config?: Partial<ThreeBodyConfig>;
+  /** Callback when simulation is reset */
+  onReset?: () => void;
 }
 
 /**
- * Component that renders the three-body problem animation using Canvas
+ * Component that renders the n-body problem animation using Canvas
  */
-const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config = {} }) => {
+const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config = {}, onReset }) => {
   // Canvas reference
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Animation frame reference
   const animationFrameRef = useRef<number | null>(null);
-  // Reference to the three-body system
+  // Reference to the system
   const systemRef = useRef<ThreeBodySystem | null>(null);
   // FPS counter state
   const [fps, setFps] = useState<number>(0);
@@ -31,6 +33,8 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
   const frameCountRef = useRef<number>(0);
   // Last FPS update timestamp
   const lastFpsUpdateRef = useRef<number>(0);
+  // Running state for UI updates
+  const [isRunning, setIsRunning] = useState<boolean>(true);
 
   // Initialize the system on mount
   useEffect(() => {
@@ -45,6 +49,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
       maxMass: 1000,
       minVelocity: -20,
       maxVelocity: 20,
+      numBodies: 3, // Default to 3 bodies
     };
 
     // Merge with any provided config options
@@ -53,6 +58,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
     // Create the system
     systemRef.current = new ThreeBodySystem(mergedConfig);
     systemRef.current.start(); // Start the simulation
+    setIsRunning(true);
 
     // Start the animation loop
     startAnimation();
@@ -63,7 +69,31 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [width, height, config]);
+  }, [width, height]);
+
+  // Update the simulation when config changes
+  useEffect(() => {
+    if (!systemRef.current) return;
+
+    // Update number of bodies if changed
+    if (config.numBodies !== undefined && systemRef.current.bodies.length !== config.numBodies) {
+      systemRef.current.setNumBodies(config.numBodies);
+      if (onReset) onReset();
+    }
+
+    // Update other configurable properties
+    if (config.G !== undefined) {
+      systemRef.current.config.G = config.G;
+    }
+
+    if (config.dt !== undefined) {
+      systemRef.current.config.dt = config.dt;
+    }
+
+    if (config.maxTrailLength !== undefined) {
+      systemRef.current.config.maxTrailLength = config.maxTrailLength;
+    }
+  }, [config, onReset]);
 
   /**
    * Start the animation loop
@@ -198,6 +228,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
   const handleReset = (): void => {
     if (systemRef.current) {
       systemRef.current.reset();
+      if (onReset) onReset();
     }
   };
 
@@ -207,6 +238,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
   const handlePlayPause = (): void => {
     if (systemRef.current) {
       systemRef.current.toggleRunning();
+      setIsRunning(systemRef.current.isRunning());
     }
   };
 
@@ -233,7 +265,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({ width, height, config
             cursor: 'pointer',
           }}
         >
-          {systemRef.current?.isRunning() ? 'Pause' : 'Play'}
+          {isRunning ? 'Pause' : 'Play'}
         </button>
         <button
           onClick={handleReset}

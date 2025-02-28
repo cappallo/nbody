@@ -38,21 +38,23 @@ export interface ThreeBodyConfig {
   minVelocity: number;
   /** Maximum initial velocity component */
   maxVelocity: number;
+  /** Number of bodies in the simulation (2-5) */
+  numBodies: number;
 }
 
 /**
- * Class implementing the three-body problem physics
+ * Class implementing the n-body problem physics
  */
 export class ThreeBodySystem {
-  /** The three bodies in the system */
+  /** The bodies in the system */
   public bodies: Body[];
   /** Configuration parameters */
-  private config: ThreeBodyConfig;
+  public config: ThreeBodyConfig;
   /** Flag to track if simulation is running */
   private running: boolean = false;
 
   /**
-   * Creates a new three-body system
+   * Creates a new n-body system
    * @param config Configuration parameters
    */
   constructor(config: ThreeBodyConfig) {
@@ -61,24 +63,24 @@ export class ThreeBodySystem {
   }
 
   /**
-   * Creates three bodies with random properties within specified ranges
-   * @returns Array of three initialized bodies
+   * Creates bodies with random properties within specified ranges
+   * @returns Array of initialized bodies
    */
   private initializeRandomBodies(): Body[] {
-    const { canvasWidth, canvasHeight, minMass, maxMass, minVelocity, maxVelocity } = this.config;
+    const { canvasWidth, canvasHeight, minMass, maxMass, minVelocity, maxVelocity, numBodies } = this.config;
 
     // Helper function to get random value in range
     const random = (min: number, max: number): number => {
       return min + Math.random() * (max - min);
     };
 
-    // Random colors that are visually distinct
-    const colors = ['#FF5252', '#4CAF50', '#2196F3'];
+    // Color palette for bodies - extended to support up to 5 bodies
+    const colors = ['#FF5252', '#4CAF50', '#2196F3', '#9C27B0', '#FFC107'];
 
     // Initialize bodies with random properties
-    return Array.from({ length: 3 }, (_, i) => {
+    return Array.from({ length: numBodies }, (_, i) => {
       // Set position in different areas to ensure interaction
-      const angle = (i * 2 * Math.PI) / 3 + random(-0.5, 0.5);
+      const angle = (i * 2 * Math.PI) / numBodies + random(-0.3, 0.3);
       const distance = random(canvasWidth * 0.15, canvasWidth * 0.3);
       const x = canvasWidth / 2 + distance * Math.cos(angle);
       const y = canvasHeight / 2 + distance * Math.sin(angle);
@@ -89,7 +91,7 @@ export class ThreeBodySystem {
         mass,
         position: [x, y],
         velocity: [random(minVelocity, maxVelocity), random(minVelocity, maxVelocity)],
-        color: colors[i],
+        color: colors[i % colors.length],
         radius: 5 + Math.sqrt(mass) * 2, // Scale radius with mass
         trail: [],
       };
@@ -141,15 +143,14 @@ export class ThreeBodySystem {
     if (!this.running) return;
 
     const { dt, maxTrailLength } = this.config;
-    const forces: [number, number][] = [
-      [0, 0],
-      [0, 0],
-      [0, 0],
-    ];
+    const numBodies = this.bodies.length;
+    const forces: [number, number][] = Array(numBodies)
+      .fill([0, 0])
+      .map(() => [0, 0]);
 
     // Calculate forces between all pairs of bodies
-    for (let i = 0; i < this.bodies.length; i++) {
-      for (let j = 0; j < this.bodies.length; j++) {
+    for (let i = 0; i < numBodies; i++) {
+      for (let j = 0; j < numBodies; j++) {
         if (i !== j) {
           const [fx, fy] = this.calculateForce(this.bodies[i], this.bodies[j]);
           forces[i][0] += fx;
@@ -159,7 +160,7 @@ export class ThreeBodySystem {
     }
 
     // Update velocities and positions
-    for (let i = 0; i < this.bodies.length; i++) {
+    for (let i = 0; i < numBodies; i++) {
       const body = this.bodies[i];
 
       // Update velocity: v = v + F/m * dt
@@ -175,6 +176,17 @@ export class ThreeBodySystem {
       if (body.trail.length > maxTrailLength) {
         body.trail.shift();
       }
+    }
+  }
+
+  /**
+   * Set the number of bodies and reset the simulation
+   * @param numBodies New number of bodies (2-5)
+   */
+  public setNumBodies(numBodies: number): void {
+    if (numBodies >= 2 && numBodies <= 5 && numBodies !== this.config.numBodies) {
+      this.config.numBodies = numBodies;
+      this.reset();
     }
   }
 

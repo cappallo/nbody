@@ -30,6 +30,7 @@ const SimulationContainer: React.FC = () => {
     G: 1000,
     dt: 0.02,
     maxTrailLength: 100,
+    numBodies: 3, // Default to 3 bodies
   });
 
   // Handle window resize for responsive canvas
@@ -70,6 +71,18 @@ const SimulationContainer: React.FC = () => {
   };
 
   /**
+   * Handle change of the number of bodies
+   * @param event Change event
+   * @param value New value
+   */
+  const handleNumBodiesChange = (_event: Event, value: number | number[]): void => {
+    setConfig((prev) => ({
+      ...prev,
+      numBodies: value as number,
+    }));
+  };
+
+  /**
    * Handle change of the trail length
    * @param event Change event
    */
@@ -78,6 +91,14 @@ const SimulationContainer: React.FC = () => {
       ...prev,
       maxTrailLength: Number(event.target.value),
     }));
+  };
+
+  /**
+   * Handle simulation reset
+   */
+  const handleReset = (): void => {
+    // Force a re-render of the canvas component
+    setConfig((prev) => ({ ...prev }));
   };
 
   return (
@@ -95,7 +116,7 @@ const SimulationContainer: React.FC = () => {
           mb: 4,
         }}
       >
-        Three-Body Problem Simulation
+        N-Body Problem Simulation
       </Typography>
 
       <Paper
@@ -109,13 +130,14 @@ const SimulationContainer: React.FC = () => {
         }}
       >
         <Typography variant='body1' paragraph>
-          The three-body problem is a classical physics problem that involves predicting the motion of three objects
-          interacting through gravitational forces. Unlike the two-body problem, which has a closed-form solution, the
-          three-body problem cannot be solved analytically for most initial conditions and exhibits chaotic behavior.
+          The n-body problem is a classical physics problem that involves predicting the motion of n objects interacting
+          through gravitational forces. Unlike the two-body problem, which has a closed-form solution, the n-body
+          problem (where n ≥ 3) cannot be solved analytically for most initial conditions and exhibits chaotic behavior.
         </Typography>
         <Typography variant='body1'>
           This simulation uses numerical integration to approximate the solution. The bodies are initialized with random
-          masses and velocities, creating unique patterns each time you reset the simulation.
+          masses and velocities, creating unique patterns each time you reset the simulation. Try changing the number of
+          bodies to see how the system dynamics change!
         </Typography>
       </Paper>
 
@@ -127,7 +149,7 @@ const SimulationContainer: React.FC = () => {
           borderRadius: 2,
         }}
       >
-        <ThreeBodyCanvas width={canvasSize.width} height={canvasSize.height} config={config} />
+        <ThreeBodyCanvas width={canvasSize.width} height={canvasSize.height} config={config} onReset={handleReset} />
       </Paper>
 
       <Paper
@@ -144,6 +166,32 @@ const SimulationContainer: React.FC = () => {
         </Typography>
 
         <Stack spacing={4}>
+          <Box>
+            <Typography id='num-bodies-slider' gutterBottom>
+              Number of Bodies: {config.numBodies}
+            </Typography>
+            <Slider
+              aria-labelledby='num-bodies-slider'
+              min={2}
+              max={5}
+              step={1}
+              marks
+              value={config.numBodies ?? 3}
+              onChange={handleNumBodiesChange}
+              sx={{
+                color: '#9C27B0',
+                '& .MuiSlider-thumb': {
+                  '&:hover, &.Mui-focusVisible': {
+                    boxShadow: '0px 0px 0px 8px rgba(156, 39, 176, 0.16)',
+                  },
+                },
+                '& .MuiSlider-markLabel': {
+                  color: 'white',
+                },
+              }}
+            />
+          </Box>
+
           <Box>
             <Typography id='g-constant-slider' gutterBottom>
               Gravitational Constant: {config.G}
