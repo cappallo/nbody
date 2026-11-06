@@ -71,6 +71,8 @@ const E = [-71 / 57600, 0, 71 / 16695, -71 / 1920, 17253 / 339200, -22 / 525, 1 
 const RTOL = 1e-10;
 const ATOL = 1e-11;
 const MAX_ATTEMPTS = 256;
+// Relative to the initial K + |U| scale, not a nearly cancelling total energy.
+const MAX_ENERGY_DRIFT = 1e-6;
 
 export interface Diagnostics {
   time: number;
@@ -264,6 +266,24 @@ export class ThreeBodySystem {
         this.diagnostics.rejectedSteps++;
         continue;
       }
+      const candidateEnergy = this.energy(result.state);
+      const drift = Math.abs(candidateEnergy.total - this.referenceEnergy.total) / this.referenceEnergy.scale;
+      // In a plunge, K and |U| can dwarf their finite difference. Stop before double
+      // precision can no longer retain the original energy scale, even with tiny steps.
+      if (!Number.isFinite(candidateEnergy.total) || !Number.isFinite(candidateEnergy.scale) ||
+        8 * Number.EPSILON * candidateEnergy.scale > MAX_ENERGY_DRIFT * this.referenceEnergy.scale) {
+        this.stopWithWarning('Near-singular encounter exceeds energy precision. Reset to begin again.');
+        break;
+      }
+      if (drift > MAX_ENERGY_DRIFT) {
+        this.diagnostics.rejectedSteps++;
+        this.nextStep = h * 0.5;
+        if (this.nextStep < resolution) {
+          this.stopWithWarning('Energy accuracy limit reached near an encounter. Reset to begin again.');
+          break;
+        }
+        continue;
+      }
       // A short frame boundary must not poison the next frame's step-size proposal.
       if (h === remaining && factor >= 1) this.nextStep = Math.max(this.nextStep, proposed);
       state = result.state;
@@ -288,19 +308,21 @@ export class ThreeBodySystem {
   }
 
   /** Energy in the center-of-mass frame; normalize by K + |U|, not near-zero E. */
-  private energy(): { total: number; scale: number } {
-    const d = this.config.dimensions;
+  private energy(state = this.bodies.flatMap(b => [...b.position, ...b.velocity])): { total: number; scale: number } {
+    const d = this.config.dimensions, stride = 2 * d;
     const mass = this.bodies.reduce((sum, b) => sum + b.mass, 0);
-    const velocity = Array.from({ length: d }, (_, axis) => axis).map(axis => this.bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass);
+    const velocity = Array.from({ length: d }, (_, axis) => this.bodies.reduce((sum, b, i) =>
+      sum + b.mass * state[i * stride + d + axis], 0) / mass);
     let kinetic = 0, potential = 0;
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
-      kinetic += 0.5 * b.mass * b.velocity.reduce((sum, v, axis) => sum + (v - velocity[axis]) ** 2, 0);
+      for (let axis = 0; axis < d; axis++) {
+        kinetic += 0.5 * b.mass * (state[i * stride + d + axis] - velocity[axis]) ** 2;
+      }
       for (let j = i + 1; j < this.bodies.length; j++) {
-        const other = this.bodies[j];
-        const r = Math.hypot(...other.position.map((p, axis) => p - b.position[axis]));
+        const r = this.distance(state, i * stride, j * stride);
         if (r === 0) return { total: 0, scale: 1 }; // Undefined at a collision; solver pauses.
-        potential -= this.config.G * b.mass * other.mass / ((d - 2) * r ** (d - 2));
+        potential -= this.config.G * b.mass * this.bodies[j].mass / ((d - 2) * r ** (d - 2));
       }
     }
     return { total: kinetic + potential, scale: Math.max(kinetic + Math.abs(potential), Number.MIN_VALUE) };

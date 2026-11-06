@@ -143,7 +143,12 @@ a grid whose spacing adapts to zoom.
 The energy readout is `abs(E - E0) / (K0 + abs(U0))`, measured in the center-of-mass
 frame. This remains meaningful when total energy is near zero. Resetting bodies
 or changing G starts a new reference. It is a diagnostic, not a proof that a chaotic
-trajectory is exact. Real gravitational slingshots and escapes are still possible.
+trajectory is exact. Each accepted step also checks energy against the initial
+`K + |U|` scale. Steps exceeding a normalized drift of `1e-6` are rejected and retried
+at a smaller size. If cancellation of enormous kinetic and potential terms would
+make this energy scale unresolvable in double precision, the solver pauses before
+committing that candidate and retains the last energy-valid state. This is especially
+relevant to inverse-cube radial plunges in 4D; it does not clamp velocities or rescale energy. Real gravitational slingshots and escapes are still possible.
 
 Exact point-mass collisions are singular. If a collision or the floating-point time
 resolution makes progress unresolvable, the simulation pauses with a visible
@@ -166,7 +171,9 @@ precision-limit pause. They check analytic trajectories or conserved quantities,
 not only finite output values. The 4D checks cover the inverse-cube force along W,
 an inclined analytic circular orbit, all six angular-momentum components, the
 correct potential energy, dimension-switch resets, and the rotation/projection
-geometry independently of the physics.
+geometry independently of the physics. A singular 4D radial-plunge regression
+checks that the solver stops with finite state and no accepted normalized energy
+drift above `1e-6`, before catastrophic cancellation overwhelms the initial energy.
 
 ## License
 

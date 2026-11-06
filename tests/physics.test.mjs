@@ -226,3 +226,17 @@ test('switching spatial dimensions resets state, trails, and diagnostics coheren
   assert.ok(s.bodies.every(b => b.position.length === 3 && b.velocity.length === 3 && b.trail.length === 0));
   assert.equal(s.getDiagnostics().time, 0);
 });
+
+
+test('singular 4D radial plunge pauses before losing the initial energy scale', () => {
+  const s = system([body([0, 0, 0, -1], [0, 0, 0, 0]), body([0, 0, 0, 1], [0, 0, 0, 0])], { dimensions: 4 });
+  let maxDrift = 0;
+  for (let frame = 0; frame < 300 && s.isRunning(); frame++) {
+    s.update(0.05);
+    maxDrift = Math.max(maxDrift, s.getDiagnostics().energyError);
+  }
+  assert.equal(s.isRunning(), false);
+  assert.match(s.getDiagnostics().warning, /precision|accuracy/);
+  assert.ok(s.bodies.every(b => [...b.position, ...b.velocity].every(Number.isFinite)));
+  assert.ok(maxDrift <= 1e-6, `maximum normalized energy drift ${maxDrift}`);
+});
