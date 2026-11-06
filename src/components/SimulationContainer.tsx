@@ -139,6 +139,7 @@ const SimulationContainer: React.FC = () => {
         gutterBottom
         align='center'
         sx={{
+          fontSize: { xs: '2rem', sm: '3rem' },
           fontWeight: 'bold',
           background: 'linear-gradient(45deg, #FE6B8B 30%, #FF8E53 90%)',
           backgroundClip: 'text',
@@ -165,9 +166,9 @@ const SimulationContainer: React.FC = () => {
           problem (where n ≥ 3) cannot be solved analytically for most initial conditions and exhibits chaotic behavior.
         </Typography>
         <Typography variant='body1'>
-          This simulation uses numerical integration to approximate the solution. The bodies are initialized with random
-          masses and velocities, creating unique patterns each time you reset the simulation. Try changing the number of
-          bodies to see how the system dynamics change!
+          Each reset creates random masses and velocities. The solver automatically takes smaller steps during close
+          encounters and checks its numerical error. Real gravitational slingshots can still eject a body; the energy
+          readout helps distinguish that behavior from numerical drift. Drag to pan, scroll to zoom, or use Auto-Follow.
         </Typography>
       </Paper>
 
@@ -202,7 +203,7 @@ const SimulationContainer: React.FC = () => {
           Simulation Controls
         </Typography>
 
-        <Stack spacing={4}>
+        <Stack sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 4 }}>
           <Box>
             <Typography id='num-bodies-slider' gutterBottom>
               Number of Bodies: {config.numBodies}
@@ -263,13 +264,16 @@ const SimulationContainer: React.FC = () => {
                   color='primary'
                 />
               }
-              label='Adaptive Time Stepping'
+              label='Extra encounter refinement'
               sx={{ mb: 2 }}
             />
+            <Typography variant='caption' sx={{ display: 'block', color: 'rgba(255, 255, 255, 0.7)', mb: 1 }}>
+              Error control and collision safeguards stay active. Extra refinement uses smaller encounter steps.
+            </Typography>
             {config.useAdaptiveTimeStep && (
               <>
                 <Typography id='position-change-ratio-slider' gutterBottom>
-                  Max Position Change Ratio: {config.maxPositionChangeRatio?.toFixed(3)}
+                  Encounter Step Fraction: {config.maxPositionChangeRatio?.toFixed(3)}
                 </Typography>
                 <Slider
                   aria-labelledby='position-change-ratio-slider'
@@ -315,10 +319,10 @@ const SimulationContainer: React.FC = () => {
 
           <Box>
             <Typography id='dt-slider' gutterBottom>
-              Base Time Step: {config.dt}
+              Maximum Solver Step: {config.dt}
             </Typography>
             <Typography variant='caption' sx={{ color: 'rgba(255, 255, 255, 0.7)', mb: 1, display: 'block' }}>
-              Controls physics accuracy and stability
+              Upper limit for internal steps; playback speed is independent
             </Typography>
             <Slider
               aria-labelledby='dt-slider'
@@ -362,7 +366,7 @@ const SimulationContainer: React.FC = () => {
               <MenuItem value='100'>Short (100)</MenuItem>
               <MenuItem value='500'>Medium (500)</MenuItem>
               <MenuItem value='1000'>Long (1000)</MenuItem>
-              <MenuItem value='2000'>Extra Long (5000)</MenuItem>
+              <MenuItem value='2000'>Extra Long (2000)</MenuItem>
             </Select>
           </FormControl>
         </Stack>

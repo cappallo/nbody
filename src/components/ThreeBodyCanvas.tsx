@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState, useCallback, useReducer } from 'react';
-import { ThreeBodySystem, ThreeBodyConfig, Body } from '../physics/ThreeBodySystem';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { ThreeBodySystem, ThreeBodyConfig, Body, Diagnostics } from '../physics/ThreeBodySystem';
 // Import Material UI icons
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
@@ -47,8 +47,8 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
   config = {},
   onReset,
 }) => {
-  // Force update function (to trigger re-renders)
-  const [, forceUpdate] = useReducer((x) => x + 1, 0);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const lastTimestampRef = useRef<number | null>(null);
 
   // Canvas dimensions state
   const [canvasDimensions, setCanvasDimensions] = useState({ width: initialWidth, height: initialHeight });
@@ -103,7 +103,8 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
    */
   const calculateBoundingBox = useCallback(
     (bodies: Body[]) => {
-      const { width, height } = canvasDimensions;
+      const width = canvasRef.current?.clientWidth || canvasDimensions.width;
+      const height = canvasRef.current?.clientHeight || canvasDimensions.height;
 
       if (!bodies.length)
         return { minX: -width / 2, maxX: width / 2, minY: -height / 2, maxY: height / 2, centerX: 0, centerY: 0 };
@@ -114,23 +115,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
       let minY = Infinity;
       let maxY = -Infinity;
 
-      // Check if any body is escaping (too far from others)
-      const avgX = bodies.reduce((sum, body) => sum + body.position[0], 0) / bodies.length;
-      const avgY = bodies.reduce((sum, body) => sum + body.position[1], 0) / bodies.length;
-
-      // Threshold for considering a body as "escaping"
-      const escapeThreshold = Math.max(width, height) * 3;
-
-      // Filter out escaping bodies
-      const nonEscapingBodies = bodies.filter((body) => {
-        const dx = body.position[0] - avgX;
-        const dy = body.position[1] - avgY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        return distance < escapeThreshold;
-      });
-
-      // If all bodies are escaping, use all bodies
-      const bodiesToUse = nonEscapingBodies.length > 1 ? nonEscapingBodies : bodies;
+      const bodiesToUse = bodies;
 
       // Calculate bounds including trail positions
       bodiesToUse.forEach((body) => {
@@ -262,8 +247,9 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
       setCanvasDimensions({ width: newWidth, height: newHeight });
 
       // Update canvas hardware pixels
-      canvasRef.current.width = newWidth;
-      canvasRef.current.height = newHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvasRef.current.width = Math.round(newWidth * dpr);
+      canvasRef.current.height = Math.round(newHeight * dpr);
 
       // If we have a system, update its config
       if (systemRef.current) {
@@ -306,8 +292,6 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
 
   // Initialize the system on mount
   useEffect(() => {
-    console.log('Initializing simulation system');
-
     // Default configuration with reasonable values
     const defaultConfig: ThreeBodyConfig = {
       G: 1000, // Gravitational constant
@@ -335,6 +319,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
 
     // Reset timing variables
     frameTimeRef.current = performance.now();
+    lastTimestampRef.current = null;
     frameCountRef.current = 0;
 
     // Clean up the previous animation frame if it exists
@@ -361,19 +346,21 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
       setCamera(cameraRef.current);
     }
 
-    // Set up an interval to ensure the UI updates regularly (30fps is enough for UI)
+    // Refresh the DOM readout without tying it to the animation frame rate.
     updateIntervalRef.current = window.setInterval(() => {
       // Copy from refs to state to ensure React renders
       setCamera({ ...cameraRef.current });
-      forceUpdate();
-    }, 33); // ~30fps refresh rate for UI updates
+      if (systemRef.current) {
+        setDiagnostics(systemRef.current.getDiagnostics());
+        setIsRunning(systemRef.current.isRunning());
+      }
+    }, 200); // Physics and rendering run separately from the DOM readout.
 
     // Start the animation loop
     startAnimation();
 
     // Cleanup on unmount
     return () => {
-      console.log('Cleaning up animation');
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
@@ -389,7 +376,6 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
   // Handle config changes separately
   useEffect(() => {
     if (!systemRef.current) return;
-    console.log('Updating simulation config', config);
 
     // Update number of bodies if changed
     if (config.numBodies !== undefined && systemRef.current.bodies.length !== config.numBodies) {
@@ -444,8 +430,6 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
    * Start the animation loop
    */
   const startAnimation = (): void => {
-    console.log('Starting animation loop');
-
     // Force an initial camera position update once bodies are initialized
     if (systemRef.current && systemRef.current.bodies.length > 0) {
       // Get container dimensions
@@ -467,35 +451,12 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
         return;
       }
 
-      // Get the speed multiplier from the simulation config
-      const speedMultiplier = systemRef.current.config.speedMultiplier || 1.0;
-
-      // Update the simulation if it's running
-      if (systemRef.current.isRunning()) {
-        // For speed values ≥ 1.0, do multiple updates per frame
-        if (speedMultiplier >= 1.0) {
-          // Calculate whole number of updates
-          const wholeUpdates = Math.floor(speedMultiplier);
-
-          // Handle the fractional part probabilistically
-          const fractionalPart = speedMultiplier - wholeUpdates;
-          const doExtraUpdate = Math.random() < fractionalPart;
-
-          // Perform updates
-          const totalUpdates = wholeUpdates + (doExtraUpdate ? 1 : 0);
-
-          for (let i = 0; i < totalUpdates; i++) {
-            systemRef.current.update();
-          }
-        }
-        // For slow motion (speed < 1.0), skip frames
-        else {
-          // Use accumulator to track partial updates
-          const shouldUpdate = Math.random() < speedMultiplier;
-          if (shouldUpdate) {
-            systemRef.current.update();
-          }
-        }
+      // Discard long gaps (background tabs, pause) rather than taking a huge catch-up step.
+      const previous = lastTimestampRef.current;
+      lastTimestampRef.current = timestamp;
+      const seconds = previous === null ? 0 : Math.min(0.05, (timestamp - previous) / 1000);
+      if (systemRef.current.isRunning() && !document.hidden) {
+        systemRef.current.update(seconds * 1.8 * systemRef.current.config.speedMultiplier);
       }
 
       // Calculate FPS
@@ -509,8 +470,6 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
 
         frameCountRef.current = 0;
         frameTimeRef.current = timestamp;
-
-        console.log(`FPS: ${newFps}`);
       }
 
       // Update camera position if auto-follow is enabled
@@ -539,9 +498,14 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     // Clear the canvas
     ctx.fillStyle = '#121212'; // Dark background
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, width, height);
 
     // Save the untransformed context
     ctx.save();
@@ -555,13 +519,16 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
 
     // Draw grid lines if enabled - use the ref for most up-to-date value
     if (showGridRef.current) {
-      const gridSize = 50;
+      // Choose a screen-sized spacing so escaped bodies never produce millions of lines.
+      const desired = 60 / currentCamera.zoom;
+      const magnitude = 10 ** Math.floor(Math.log10(desired));
+      const gridSize = Math.ceil(desired / magnitude) * magnitude;
       const gridOffsetX = Math.floor(-currentCamera.x / currentCamera.zoom / gridSize) * gridSize;
       const gridOffsetY = Math.floor(-currentCamera.y / currentCamera.zoom / gridSize) * gridSize;
-      const gridCountX = Math.ceil(canvas.width / currentCamera.zoom / gridSize) + 2;
-      const gridCountY = Math.ceil(canvas.height / currentCamera.zoom / gridSize) + 2;
+      const gridCountX = Math.ceil(width / currentCamera.zoom / gridSize) + 2;
+      const gridCountY = Math.ceil(height / currentCamera.zoom / gridSize) + 2;
 
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.065)';
       ctx.lineWidth = 1 / currentCamera.zoom; // Maintain constant visual thickness
 
       // Draw horizontal grid lines
@@ -609,7 +576,9 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
         gradient.addColorStop(1, `${body.color}99`); // More opaque at end
 
         ctx.strokeStyle = gradient;
-        ctx.lineWidth = radius * 0.4;
+        ctx.lineWidth = Math.max(1 / currentCamera.zoom, radius * 0.12);
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
         ctx.stroke();
       }
 
@@ -639,47 +608,6 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
 
     // Restore original transformation
     ctx.restore();
-
-    // Draw FPS counter and camera info (not affected by camera)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'right';
-    ctx.fillText(`FPS: ${fpsRef.current}`, canvas.width - 10, 20);
-
-    // Draw auto-follow indicator
-    ctx.textAlign = 'left';
-    ctx.fillText(`Auto-follow: ${currentCamera.autoFollow ? 'ON' : 'OFF'}`, 10, 20);
-    ctx.fillText(`Zoom: ${Math.round(currentCamera.zoom * 100)}%`, 10, 40);
-    ctx.fillText(`Grid: ${showGridRef.current ? 'ON' : 'OFF'}`, 10, 60);
-
-    // Get current stats
-    const bodies = systemRef.current.bodies;
-    const effectiveTimeStep = systemRef.current.getEffectiveTimeStep();
-    const speedMultiplier = systemRef.current.config.speedMultiplier;
-    const isAdaptive = systemRef.current.config.useAdaptiveTimeStep;
-
-    // Draw stats panel
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.fillRect(10, 80, 200, isAdaptive ? 125 : 105);
-
-    ctx.font = '14px monospace';
-    ctx.fillStyle = 'white';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-
-    // Draw stats in the panel
-    ctx.fillText(`FPS: ${fpsRef.current}`, 20, 90);
-    ctx.fillText(`Bodies: ${bodies.length}`, 20, 110);
-    ctx.fillText(`Speed: ${speedMultiplier.toFixed(1)}x`, 20, 130);
-    ctx.fillText(`dt: ${effectiveTimeStep.toFixed(5)}`, 20, 150);
-
-    if (isAdaptive) {
-      ctx.fillStyle = '#4CAF50';
-      ctx.fillText('Adaptive Time Step: ON', 20, 170);
-    } else {
-      ctx.fillStyle = '#FF5252';
-      ctx.fillText('Adaptive Time Step: OFF', 20, 170);
-    }
   };
 
   /**
@@ -688,6 +616,8 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
   const handleReset = (): void => {
     if (systemRef.current) {
       systemRef.current.reset();
+      setDiagnostics(systemRef.current.getDiagnostics());
+      lastTimestampRef.current = null;
 
       // Reset camera on simulation reset
       cameraRef.current = {
@@ -707,6 +637,7 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
    */
   const handlePlayPause = (): void => {
     if (systemRef.current) {
+      lastTimestampRef.current = null;
       systemRef.current.toggleRunning();
       setIsRunning(systemRef.current.isRunning());
     }
@@ -730,14 +661,12 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
     const newValue = !showGridRef.current;
     showGridRef.current = newValue; // Update ref immediately for rendering
     setShowGrid(newValue); // Update state for UI
-    console.log('Grid toggled:', newValue); // Debug log
   };
 
   // Mouse event handlers for manual camera control
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>): void => {
     // Use left click for dragging (more intuitive)
     e.preventDefault();
-    console.log('Mouse down', e.button);
 
     dragRef.current = {
       isDragging: true,
@@ -760,8 +689,6 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
       const dx = e.clientX - dragRef.current.lastX;
       const dy = e.clientY - dragRef.current.lastY;
 
-      console.log('Dragging', dx, dy);
-
       // Update camera ref directly
       cameraRef.current = {
         ...cameraRef.current,
@@ -779,12 +706,10 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
   };
 
   const handleMouseUp = (): void => {
-    console.log('Mouse up');
     dragRef.current.isDragging = false;
   };
 
   const handleMouseLeave = (): void => {
-    console.log('Mouse leave');
     dragRef.current.isDragging = false;
   };
 
@@ -908,9 +833,22 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
         width: '100%',
         height: '100%',
         overflow: 'hidden',
+        background: '#121212',
       }}
     >
+      <div className='simulation-readout' aria-live='off'>
+        <span>{camera.autoFollow ? 'Auto-follow' : 'Manual camera'} · {Math.round(camera.zoom * 100)}% · {fpsRef.current} fps</span>
+        <span>t = {(diagnostics?.time ?? 0).toFixed(2)} · step {systemRef.current?.getEffectiveTimeStep().toExponential(1) ?? '—'}</span>
+        <span title='Change in total energy, normalized by initial kinetic plus absolute potential energy.'>Energy drift: {((diagnostics?.energyError ?? 0) * 100).toExponential(1)}%</span>
+        <span className='solver-label'>Error control active · Newtonian gravity</span>
+      </div>
+      {(diagnostics?.warning || diagnostics?.slowed) && (
+        <div className='simulation-notice' role='status'>
+          {diagnostics.warning ?? 'Resolving close encounter — playback slowed to preserve accuracy.'}
+        </div>
+      )}
       <canvas
+        aria-label='Animated gravitational bodies and their orbital trails. Drag to pan; scroll to zoom.'
         ref={canvasRef}
         style={{
           display: 'block',
@@ -931,7 +869,9 @@ const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
           bottom: '10px',
           left: '10px',
           display: 'flex',
-          gap: '10px',
+          gap: '6px',
+          flexWrap: 'wrap',
+          right: '10px',
         }}
       >
         <button

@@ -26,9 +26,9 @@ export interface ThreeBodyConfig {
   dt: number;
   /** Speed multiplier (independent of time resolution) */
   speedMultiplier: number;
-  /** Whether to use adaptive time stepping */
+  /** Whether to add extra encounter refinement (error control is always enabled) */
   useAdaptiveTimeStep: boolean;
-  /** Maximum allowed position change ratio per step (for adaptive time stepping) */
+  /** Fraction of each pair's encounter timescale used for extra refinement */
   maxPositionChangeRatio: number;
   /** Canvas dimensions */
   canvasWidth: number;
@@ -48,275 +48,258 @@ export interface ThreeBodyConfig {
   numBodies: number;
 }
 
-/**
- * Class implementing the n-body problem physics
+/** Dormand–Prince 5(4), with pairwise encounter limits and rejected-step retry.
+ * Newtonian point masses: no force softening, velocity clamps, or energy rescaling.
+ * Tableau: Dormand & Prince (1980), also used by scipy.integrate.RK45.
  */
-export class ThreeBodySystem {
-  /** The bodies in the system */
-  public bodies: Body[];
-  /** Configuration parameters */
-  public config: ThreeBodyConfig;
-  /** Flag to track if simulation is running */
-  private running: boolean = false;
-  /** Effective time step after applying speed multiplier and adaptive calculations */
-  private effectiveTimeStep: number = 0;
+const A = [
+  [],
+  [1 / 5],
+  [3 / 40, 9 / 40],
+  [44 / 45, -56 / 15, 32 / 9],
+  [19372 / 6561, -25360 / 2187, 64448 / 6561, -212 / 729],
+  [9017 / 3168, -355 / 33, 46732 / 5247, 49 / 176, -5103 / 18656],
+  [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84],
+];
+const E = [-71 / 57600, 0, 71 / 16695, -71 / 1920, 17253 / 339200, -22 / 525, 1 / 40];
+const RTOL = 1e-10;
+const ATOL = 1e-11;
+const MAX_ATTEMPTS = 256;
 
-  /**
-   * Creates a new n-body system
-   * @param config Configuration parameters
-   */
+export interface Diagnostics {
+  time: number;
+  energyError: number;
+  steps: number;
+  rejectedSteps: number;
+  slowed: boolean;
+  warning: string | null;
+}
+
+export class ThreeBodySystem {
+  public bodies: Body[];
+  public config: ThreeBodyConfig;
+  private running = false;
+  private effectiveTimeStep = 0;
+  private nextStep = Infinity;
+  private referenceEnergy: { total: number; scale: number } | null = null;
+  private referenceG: number;
+  private diagnostics: Diagnostics = {
+    time: 0, energyError: 0, steps: 0, rejectedSteps: 0, slowed: false, warning: null,
+  };
+
   constructor(config: ThreeBodyConfig) {
-    // Set default values for new parameters if not provided
-    this.config = {
-      ...config,
-      speedMultiplier: config.speedMultiplier ?? 1.0,
-      useAdaptiveTimeStep: config.useAdaptiveTimeStep ?? true,
-      maxPositionChangeRatio: config.maxPositionChangeRatio ?? 0.01,
-    };
-    // Initialize effective time step based only on dt (not speed)
-    this.effectiveTimeStep = this.config.dt;
+    this.config = { ...config };
+    this.referenceG = config.G;
     this.bodies = this.initializeRandomBodies();
   }
 
-  /**
-   * Creates bodies with random properties within specified ranges
-   * @returns Array of initialized bodies
-   */
   private initializeRandomBodies(): Body[] {
-    const { canvasWidth, canvasHeight, minMass, maxMass, minVelocity, maxVelocity, numBodies } = this.config;
-
-    // Helper function to get random value in range
-    const random = (min: number, max: number): number => {
-      return min + Math.random() * (max - min);
-    };
-
-    // Color palette for bodies - extended to support up to 5 bodies
+    const c = this.config;
+    const random = (min: number, max: number) => min + Math.random() * (max - min);
     const colors = ['#FF5252', '#4CAF50', '#2196F3', '#9C27B0', '#FFC107'];
-
-    // Initialize bodies with random properties
-    return Array.from({ length: numBodies }, (_, i) => {
-      // Set position in different areas to ensure interaction
-      const angle = (i * 2 * Math.PI) / numBodies + random(-0.3, 0.3);
-      const distance = random(canvasWidth * 0.15, canvasWidth * 0.3);
-      const x = canvasWidth / 2 + distance * Math.cos(angle);
-      const y = canvasHeight / 2 + distance * Math.sin(angle);
-
-      // Create a body with random properties
-      const mass = Math.pow(10, random(minMass, maxMass));
-      const body: Body = {
+    const bodies: Body[] = Array.from({ length: c.numBodies }, (_, i) => {
+      const angle = i * 2 * Math.PI / c.numBodies + random(-0.3, 0.3);
+      const distance = random(Math.min(c.canvasWidth, c.canvasHeight) * 0.2,
+        Math.min(c.canvasWidth, c.canvasHeight) * 0.35);
+      const mass = Math.pow(10, random(c.minMass, c.maxMass));
+      return {
         mass,
-        position: [x, y],
-        velocity: [random(minVelocity, maxVelocity), random(minVelocity, maxVelocity)],
-        color: colors[i % colors.length],
-        radius: 5 + Math.sqrt(mass) * 2, // Scale radius with mass
-        trail: [],
+        position: [c.canvasWidth / 2 + distance * Math.cos(angle),
+          c.canvasHeight / 2 + distance * Math.sin(angle)],
+        velocity: [random(c.minVelocity, c.maxVelocity), random(c.minVelocity, c.maxVelocity)],
+        color: colors[i % colors.length], radius: 5 + Math.sqrt(mass) * 2, trail: [],
       };
-
-      return body;
     });
+    // Remove bulk translation once at initialization; do not alter later dynamics.
+    const mass = bodies.reduce((sum, b) => sum + b.mass, 0);
+    const velocity = [0, 1].map(axis => bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass);
+    for (const b of bodies) {
+      b.velocity[0] -= velocity[0];
+      b.velocity[1] -= velocity[1];
+    }
+    return bodies;
   }
 
-  /**
-   * Reset the simulation with new random bodies
-   */
   public reset(): void {
     this.bodies = this.initializeRandomBodies();
+    this.effectiveTimeStep = 0;
+    this.nextStep = Infinity;
+    this.referenceEnergy = null;
+    this.referenceG = this.config.G;
+    this.diagnostics = { time: 0, energyError: 0, steps: 0, rejectedSteps: 0, slowed: false, warning: null };
   }
 
-  /**
-   * Calculate the gravitational force between two bodies
-   * @param body1 First body
-   * @param body2 Second body
-   * @returns Force vector [Fx, Fy]
-   */
-  private calculateForce(body1: Body, body2: Body): [number, number] {
-    const G = this.config.G;
-    const [x1, y1] = body1.position;
-    const [x2, y2] = body2.position;
-
-    // Distance between bodies
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const distSquared = dx * dx + dy * dy;
-
-    // Avoid division by zero with a small epsilon
-    const dist = Math.sqrt(distSquared) + 1e-10;
-
-    // Newton's law of gravitation: F = G * m1 * m2 / r^2
-    const forceMagnitude = (G * body1.mass * body2.mass) / distSquared;
-
-    // Force components
-    const fx = (forceMagnitude * dx) / dist;
-    const fy = (forceMagnitude * dy) / dist;
-
-    return [fx, fy];
-  }
-
-  /**
-   * Calculate the adaptive time step based on body velocities and positions
-   * @returns The calculated adaptive time step
-   */
-  private calculateAdaptiveTimeStep(): number {
-    if (!this.config.useAdaptiveTimeStep) {
-      return this.config.dt; // Use base time step without speed multiplier
-    }
-
-    const { maxPositionChangeRatio } = this.config;
-    const numBodies = this.bodies.length;
-    let maxVelocityMagnitude = 0;
-    let minDistance = Infinity;
-
-    // Find the maximum velocity magnitude and minimum distance between bodies
-    for (let i = 0; i < numBodies; i++) {
-      const body = this.bodies[i];
-      const [vx, vy] = body.velocity;
-      const velocityMagnitude = Math.sqrt(vx * vx + vy * vy);
-
-      if (velocityMagnitude > maxVelocityMagnitude) {
-        maxVelocityMagnitude = velocityMagnitude;
+  /** State layout is x, y, vx, vy per body. Evaluate each pair once. */
+  private derivative(state: number[]): number[] {
+    const result = new Array<number>(state.length).fill(0);
+    for (let i = 0; i < this.bodies.length; i++) {
+      const a = i * 4;
+      result[a] = state[a + 2];
+      result[a + 1] = state[a + 3];
+      for (let j = i + 1; j < this.bodies.length; j++) {
+        const b = j * 4;
+        const dx = state[b] - state[a];
+        const dy = state[b + 1] - state[a + 1];
+        const r = Math.hypot(dx, dy);
+        if (!(r > 0)) return result.fill(NaN); // Exact point collision is singular.
+        const factor = this.config.G / r / r / r;
+        const fx = factor * dx;
+        const fy = factor * dy;
+        result[a + 2] += this.bodies[j].mass * fx;
+        result[a + 3] += this.bodies[j].mass * fy;
+        result[b + 2] -= this.bodies[i].mass * fx;
+        result[b + 3] -= this.bodies[i].mass * fy;
       }
+    }
+    return result;
+  }
 
-      // Find minimum distance between bodies
-      for (let j = i + 1; j < numBodies; j++) {
-        const otherBody = this.bodies[j];
-        const [x1, y1] = body.position;
-        const [x2, y2] = otherBody.position;
-        const dx = x2 - x1;
-        const dy = y2 - y1;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+  /** Relative speed AND gravitational free-fall time, including pairs at rest.
+   * There is deliberately no minimum encounter step that could overrule this limit.
+   */
+  private encounterStep(state: number[]): number {
+    let limit = this.config.dt;
+    const fraction = this.config.useAdaptiveTimeStep
+      ? Math.min(0.05, Math.max(0.001, this.config.maxPositionChangeRatio)) : 0.05;
+    for (let i = 0; i < this.bodies.length; i++) {
+      for (let j = i + 1; j < this.bodies.length; j++) {
+        const a = 4 * i, b = 4 * j;
+        const r = Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1]);
+        const v = Math.hypot(state[b + 2] - state[a + 2], state[b + 3] - state[a + 3]);
+        const mu = this.config.G * (this.bodies[i].mass + this.bodies[j].mass);
+        limit = Math.min(limit, fraction * Math.min(v > 0 ? r / v : Infinity,
+          mu > 0 ? r * Math.sqrt(r / mu) : Infinity));
+      }
+    }
+    return limit;
+  }
 
-        if (distance < minDistance) {
-          minDistance = distance;
+  private trial(state: number[], h: number): { state: number[]; error: number } {
+    const stages: number[][] = [];
+    let candidate = state;
+    for (let s = 0; s < A.length; s++) {
+      candidate = state.map((value, k) => value + h * A[s].reduce((sum, a, j) => sum + a * stages[j][k], 0));
+      stages.push(this.derivative(candidate));
+    }
+    const errors = state.map((_, k) => h * E.reduce((sum, e, j) => sum + e * stages[j][k], 0));
+    let error = 0;
+    // Pair-relative error scales keep accuracy independent of screen origin or bulk velocity.
+    // In particular, a distant escaping body cannot relax a close binary's tolerance.
+    for (let i = 0; i < this.bodies.length; i++) {
+      for (let j = i + 1; j < this.bodies.length; j++) {
+        const a = i * 4, b = j * 4;
+        const r = Math.max(Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1]),
+          Math.hypot(candidate[b] - candidate[a], candidate[b + 1] - candidate[a + 1]));
+        const v = Math.max(Math.hypot(state[b + 2] - state[a + 2], state[b + 3] - state[a + 3]),
+          Math.hypot(candidate[b + 2] - candidate[a + 2], candidate[b + 3] - candidate[a + 3]),
+          Math.sqrt(this.config.G * (this.bodies[i].mass + this.bodies[j].mass) / r));
+        for (let k = 0; k < 4; k++) {
+          error = Math.max(error, Math.abs(errors[b + k] - errors[a + k]) / (ATOL + RTOL * (k < 2 ? r : v)));
         }
       }
     }
-
-    // Default to base time step if there's only one body or other edge cases
-    if (numBodies <= 1 || minDistance === Infinity || maxVelocityMagnitude === 0) {
-      return this.config.dt; // Use base time step without speed multiplier
-    }
-
-    // Calculate adaptive time step to ensure bodies don't move more than
-    // maxPositionChangeRatio * minDistance in a single time step
-    const maxAllowedChange = maxPositionChangeRatio * minDistance;
-    const adaptiveTimeStep = maxAllowedChange / maxVelocityMagnitude;
-
-    // Clamp the time step to avoid extremes
-    const baseTimeStep = this.config.dt; // Use base time step without speed multiplier
-    const maxTimeStep = baseTimeStep * 10;
-    const minTimeStep = baseTimeStep * 0.1;
-
-    return Math.min(Math.max(adaptiveTimeStep, minTimeStep), maxTimeStep);
+    if (!candidate.every(Number.isFinite) || !Number.isFinite(error)) error = Infinity;
+    return { state: candidate, error };
   }
 
-  /**
-   * Update the system state by one time step
+  /** Advance a requested amount of simulated time, independent of render cadence.
+   * Bounded work slows playback during expensive encounters; no unsafe catch-up step.
+   * Returns actual elapsed simulated time, which may be less than requested.
    */
-  public update(): void {
-    if (!this.running) return;
+  public update(duration = this.config.dt): number {
+    if (!this.running || !(duration > 0) || !Number.isFinite(duration)) return 0;
+    if (!(this.config.dt > 0) || !Number.isFinite(this.config.dt) ||
+      !(this.config.G >= 0) || !Number.isFinite(this.config.G) ||
+      this.bodies.some(b => !(b.mass > 0) || !Number.isFinite(b.mass) ||
+        ![...b.position, ...b.velocity].every(Number.isFinite))) {
+      this.stopWithWarning('Invalid physical state. Reset to begin again.');
+      return 0;
+    }
+    // Changing G changes the Hamiltonian, so start a new energy comparison.
+    if (this.referenceG !== this.config.G) {
+      this.referenceEnergy = null;
+      this.referenceG = this.config.G;
+      this.nextStep = Infinity;
+    }
+    this.referenceEnergy ??= this.energy();
+    let state = this.bodies.flatMap(b => [...b.position, ...b.velocity]);
+    let elapsed = 0;
+    let attempts = 0;
+    this.diagnostics.slowed = false;
+    while (elapsed < duration && attempts++ < MAX_ATTEMPTS) {
+      const remaining = duration - elapsed;
+      const h = Math.min(remaining, this.nextStep, this.encounterStep(state));
+      // Stop rather than enlarge an unresolvable step. Never write non-finite state.
+      const resolution = 16 * Number.EPSILON * Math.max(1, this.diagnostics.time);
+      if (!(h > 0) || !Number.isFinite(h) || (h < resolution && remaining > resolution)) {
+        this.stopWithWarning('Point-mass collision or precision limit reached. Reset to begin again.');
+        break;
+      }
+      const result = this.trial(state, h);
+      const factor = result.error === 0 ? 4 : Math.max(0.1, Math.min(4, 0.9 * result.error ** (-1 / 5)));
+      this.nextStep = h * factor;
+      if (result.error > 1) {
+        this.diagnostics.rejectedSteps++;
+        continue;
+      }
+      state = result.state;
+      elapsed += h;
+      this.diagnostics.time += h;
+      this.effectiveTimeStep = h;
+      this.diagnostics.steps++;
+    }
+    this.diagnostics.slowed = elapsed < duration && !this.diagnostics.warning;
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i];
+      b.position = [state[4 * i], state[4 * i + 1]];
+      b.velocity = [state[4 * i + 2], state[4 * i + 3]];
+      // Sample trails by playback updates, not by tiny internal solver steps.
+      if (elapsed > 0) b.trail.push([...b.position]);
+      const excess = b.trail.length - this.config.maxTrailLength;
+      if (excess > 0) b.trail.splice(0, excess);
+    }
+    const energy = this.energy();
+    this.diagnostics.energyError = Math.abs(energy.total - this.referenceEnergy.total) / this.referenceEnergy.scale;
+    return elapsed;
+  }
 
-    // Calculate effective time step using adaptive algorithm (without speed multiplier)
-    this.effectiveTimeStep = this.calculateAdaptiveTimeStep();
-
-    const { maxTrailLength } = this.config;
-    const numBodies = this.bodies.length;
-    const forces: [number, number][] = Array(numBodies)
-      .fill([0, 0])
-      .map(() => [0, 0]);
-
-    // Calculate forces between all pairs of bodies
-    for (let i = 0; i < numBodies; i++) {
-      for (let j = 0; j < numBodies; j++) {
-        if (i !== j) {
-          const [fx, fy] = this.calculateForce(this.bodies[i], this.bodies[j]);
-          forces[i][0] += fx;
-          forces[i][1] += fy;
-        }
+  /** Energy in the center-of-mass frame; normalize by K + |U|, not near-zero E. */
+  private energy(): { total: number; scale: number } {
+    const mass = this.bodies.reduce((sum, b) => sum + b.mass, 0);
+    const velocity = [0, 1].map(axis => this.bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass);
+    let kinetic = 0, potential = 0;
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i];
+      kinetic += 0.5 * b.mass * ((b.velocity[0] - velocity[0]) ** 2 + (b.velocity[1] - velocity[1]) ** 2);
+      for (let j = i + 1; j < this.bodies.length; j++) {
+        const other = this.bodies[j];
+        const r = Math.hypot(other.position[0] - b.position[0], other.position[1] - b.position[1]);
+        if (r === 0) return { total: 0, scale: 1 }; // Undefined at a collision; solver pauses.
+        potential -= this.config.G * b.mass * other.mass / r;
       }
     }
-
-    // Update velocities and positions
-    for (let i = 0; i < numBodies; i++) {
-      const body = this.bodies[i];
-
-      // Update velocity: v = v + F/m * dt
-      body.velocity[0] += (forces[i][0] / body.mass) * this.effectiveTimeStep;
-      body.velocity[1] += (forces[i][1] / body.mass) * this.effectiveTimeStep;
-
-      // Update position: p = p + v * dt
-      body.position[0] += body.velocity[0] * this.effectiveTimeStep;
-      body.position[1] += body.velocity[1] * this.effectiveTimeStep;
-
-      // Store position in trail for visualization
-      body.trail.push([...body.position]);
-      if (body.trail.length > maxTrailLength) {
-        body.trail.shift();
-      }
-    }
+    return { total: kinetic + potential, scale: Math.max(kinetic + Math.abs(potential), Number.MIN_VALUE) };
   }
 
-  /**
-   * Get the current effective time step being used (after adjustments)
-   * @returns The effective time step
-   */
-  public getEffectiveTimeStep(): number {
-    return this.effectiveTimeStep;
+  private stopWithWarning(message: string): void {
+    this.running = false;
+    this.diagnostics.warning = message;
   }
 
-  /**
-   * Set the speed multiplier
-   * @param speedMultiplier New speed multiplier value
-   */
-  public setSpeedMultiplier(speedMultiplier: number): void {
-    if (speedMultiplier > 0) {
-      this.config.speedMultiplier = speedMultiplier;
-    }
+  public getDiagnostics(): Diagnostics { return { ...this.diagnostics }; }
+  public getEffectiveTimeStep(): number { return this.effectiveTimeStep; }
+  public setSpeedMultiplier(value: number): void {
+    if (value > 0 && Number.isFinite(value)) this.config.speedMultiplier = value;
   }
-
-  /**
-   * Toggle adaptive time stepping
-   * @param useAdaptive Whether to use adaptive time stepping
-   */
-  public setAdaptiveTimeStep(useAdaptive: boolean): void {
-    this.config.useAdaptiveTimeStep = useAdaptive;
-  }
-
-  /**
-   * Set the number of bodies and reset the simulation
-   * @param numBodies New number of bodies (2-5)
-   */
-  public setNumBodies(numBodies: number): void {
-    if (numBodies >= 2 && numBodies <= 5 && numBodies !== this.config.numBodies) {
-      this.config.numBodies = numBodies;
+  public setAdaptiveTimeStep(value: boolean): void { this.config.useAdaptiveTimeStep = value; }
+  public setNumBodies(value: number): void {
+    if (Number.isInteger(value) && value >= 2 && value <= 5 && value !== this.config.numBodies) {
+      this.config.numBodies = value;
       this.reset();
     }
   }
-
-  /**
-   * Start the simulation
-   */
-  public start(): void {
-    this.running = true;
-  }
-
-  /**
-   * Pause the simulation
-   */
-  public pause(): void {
-    this.running = false;
-  }
-
-  /**
-   * Check if simulation is running
-   */
-  public isRunning(): boolean {
-    return this.running;
-  }
-
-  /**
-   * Toggle simulation running state
-   */
-  public toggleRunning(): void {
-    this.running = !this.running;
-  }
+  public start(): void { if (!this.diagnostics.warning) this.running = true; }
+  public pause(): void { this.running = false; }
+  public isRunning(): boolean { return this.running; }
+  public toggleRunning(): void { if (this.running) this.pause(); else this.start(); }
 }

@@ -74,3 +74,34 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+.simulation-readout {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 13px;
+  border: 1px solid #ffffff14;
+  border-radius: 8px;
+  background: #121212cc;
+  color: #d1d5db;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  pointer-events: none;
+}
+.solver-label { color: #8ed3a2; }
+.simulation-notice {
+  position: absolute;
+  top: 132px;
+  left: 14px;
+  right: 14px;
+  width: fit-content;
+  max-width: calc(100% - 28px);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #372c18ed;
+  color: #ffdd9a;
+  font-size: 12px;
+  pointer-events: none;
+}
+button:focus-visible { outline: 2px solid #FE6B8B; outline-offset: 3px; }
