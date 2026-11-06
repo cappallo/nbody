@@ -85,3 +85,32 @@ button:focus-visible, canvas:focus-visible { outline: 2px solid #fe91ad; outline
   .optional-label, .toolbar-separator { display: none; }
   .view-help.MuiTypography-root { font-size: 10px; }
 }
+
+.dimension-row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; justify-content: center; margin: 0 0 22px; }
+.dimension-row > span { color: #9daec9; font: 11px/1.6 ui-monospace, Consolas, monospace; }
+.dimension-row small { color: #6f7e96; font-size: 10px; }
+.dimension-picker { display: inline-flex; padding: 4px; gap: 3px; border: 1px solid #a4baff25; border-radius: 9px; background: #0c1220; }
+.dimension-picker button { padding: 7px 18px; border: 0; border-radius: 6px; background: transparent; color: #8e9fbb; font-weight: 600; font-size: 12px; }
+.dimension-picker button[aria-pressed='true'] { color: #f0e9ff; background: #8e75d93b; box-shadow: inset 0 0 0 1px #bc9cff38; }
+.dimension-picker button:hover { color: white; }
+.hyper-controls { padding: 16px 20px 8px; border: 1px solid #a698e12c; border-radius: 12px; margin-bottom: 18px; background: linear-gradient(125deg, #171528b8, #0e1622c9); }
+.hyper-intro { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 15px; }
+.hyper-intro strong { font-size: 12px; font-weight: 500; color: #d2c6ee; }
+.hyper-intro span { font-size: 11px; color: #8d99b3; }
+.hyper-intro button { border: 0; background: transparent; color: #bca7ed; font-size: 11px; margin-left: auto; padding: 4px 0; }
+.hyper-sliders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px; margin-top: 13px; }
+.hyper-sliders label { display: flex; justify-content: space-between; font: 11px/1.6 ui-monospace, Consolas, monospace; color: #9faec8; }
+.hyper-sliders label span { color: #c6b6f3; }
+.hyper-controls p { color: #74839d; font-size: 10px; margin: 2px 0 4px; }
+.body-legend.four-d-legend { display: grid; gap: 2px; }
+.four-d-legend small { color: #b5a2d4; font-size: 10px; margin-left: 5px; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .dimension-row { gap: 8px 12px; }
+  .dimension-row small { flex-basis: 100%; text-align: center; }
+  .hyper-controls { padding: 12px 14px 8px; }
+  .hyper-intro span { flex-basis: 100%; }
+  .hyper-intro button { margin-left: 0; }
+  .hyper-sliders { gap: 14px; }
+  .hyper-sliders label { display: grid; font-size: 10px; }
+  .body-legend.four-d-legend { top: 48px; }
+}

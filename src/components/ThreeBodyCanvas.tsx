@@ -11,15 +11,18 @@ import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import { ThreeBodySystem } from '../physics/ThreeBodySystem';
 import type { Diagnostics, ThreeBodyConfig } from '../physics/ThreeBodySystem';
 import { SpaceRenderer } from '../graphics/SpaceRenderer';
+import { DEFAULT_PROJECTION } from '../graphics/projection';
+import type { ProjectionAngles } from '../graphics/projection';
 
 interface Props {
   width: number;
   height: number;
   config?: Partial<ThreeBodyConfig>;
   onReset?: () => void;
+  projection?: ProjectionAngles;
 }
 
-export default function ThreeBodyCanvas({ width, height, config = {}, onReset }: Props) {
+export default function ThreeBodyCanvas({ width, height, config = {}, onReset, projection = DEFAULT_PROJECTION }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const systemRef = useRef<ThreeBodySystem | null>(null);
@@ -44,7 +47,7 @@ export default function ThreeBodyCanvas({ width, height, config = {}, onReset }:
       maxPositionChangeRatio: 0.01, canvasWidth: bounds.width || width,
       canvasHeight: bounds.height || height, maxTrailLength: 500,
       minMass: 1.75, maxMass: 3.75, minVelocity: -50, maxVelocity: 50,
-      numBodies: 3, ...initialConfig.current,
+      numBodies: 3, dimensions: 3, ...initialConfig.current,
     });
     systemRef.current = system;
     let view: SpaceRenderer;
@@ -132,18 +135,23 @@ export default function ThreeBodyCanvas({ width, height, config = {}, onReset }:
     const system = systemRef.current;
     if (!system) return;
     const previousCount = system.bodies.length;
+    const previousDimensions = system.config.dimensions;
+    const wasWarning = Boolean(system.getDiagnostics().warning);
+    if (config.dimensions !== undefined) system.setDimensions(config.dimensions);
     if (config.numBodies !== undefined) system.setNumBodies(config.numBodies);
     for (const key of ['G', 'dt', 'maxTrailLength', 'maxPositionChangeRatio'] as const) {
       if (config[key] !== undefined) system.config[key] = config[key];
     }
     if (config.speedMultiplier !== undefined) system.setSpeedMultiplier(config.speedMultiplier);
     if (config.useAdaptiveTimeStep !== undefined) system.setAdaptiveTimeStep(config.useAdaptiveTimeStep);
-    if (previousCount !== system.bodies.length) {
+    if (previousCount !== system.bodies.length || previousDimensions !== system.config.dimensions) {
+      if (wasWarning) { system.start(); setRunning(true); }
       rendererRef.current?.fit(system.bodies, true);
       setStats(null);
       setFollowing(true);
     }
   }, [config]);
+  useEffect(() => { rendererRef.current?.setProjection(projection); }, [projection]);
   useEffect(() => { rendererRef.current?.setFollowing(following); }, [following]);
   useEffect(() => { rendererRef.current?.setOrbiting(orbiting); }, [orbiting]);
   useEffect(() => { rendererRef.current?.setGrid(grid); }, [grid]);
@@ -182,16 +190,17 @@ export default function ThreeBodyCanvas({ width, height, config = {}, onReset }:
     } catch { setNotice('Fullscreen is unavailable in this browser. You can keep using the 3D view here.'); }
   };
   const diagnostics = stats?.diagnostics;
+  const dimensions = config.dimensions ?? 3;
 
   return (
     <div className='space-stage' ref={containerRef}>
       <canvas ref={canvasRef} tabIndex={0}
-        aria-label='Interactive 3D gravity simulation. Drag to orbit, scroll to zoom, right-drag to pan. Arrow keys pan; Home resets the camera.' />
+        aria-label={`Interactive ${dimensions}D gravity simulation${dimensions === 4 ? ' projected into 3D' : ''}. Drag to orbit, scroll to zoom, right-drag to pan. Arrow keys pan; Home resets the camera.`} />
       <div className='space-vignette' />
       <div className='scene-heading'>
         <span className={`live-dot ${running ? '' : 'paused'}`} />
         <span>{running ? 'LIVE SIMULATION' : 'PAUSED'}</span>
-        <span className='dimension-badge'>3D</span>
+        <span className='dimension-badge'>{dimensions === 4 ? '4D projection' : '3D'}</span>
       </div>
       <div className='scene-hint'>DRAG TO ORBIT <span>/</span> SCROLL TO ZOOM</div>
       <div className='space-stats'>
@@ -201,9 +210,10 @@ export default function ThreeBodyCanvas({ width, height, config = {}, onReset }:
         </span>
         <span className='performance-stat'><b>{stats?.fps ?? 0}</b> FPS</span>
       </div>
-      <div className='body-legend' aria-label='Body colors'>
+      <div className={`body-legend ${dimensions === 4 ? 'four-d-legend' : ''}`} aria-label={dimensions === 4 ? 'Body colors and fourth-coordinate positions' : 'Body colors'}>
         {systemRef.current?.bodies.map((body, i) => (
-          <span key={i}><i style={{ background: body.color, boxShadow: `0 0 9px ${body.color}` }} />{i + 1}</span>
+          <span key={i}><i style={{ background: body.color, boxShadow: `0 0 9px ${body.color}` }} />{i + 1}
+            {dimensions === 4 && <small> w {body.position[3]?.toFixed(0) ?? '0'}</small>}</span>
         ))}
       </div>
       {(diagnostics?.warning || diagnostics?.slowed || notice) && (
@@ -217,7 +227,7 @@ export default function ThreeBodyCanvas({ width, height, config = {}, onReset }:
         <button className='primary-control' onClick={toggleRunning} title='Pause or resume the physics'>
           {running ? <PauseIcon fontSize='small' /> : <PlayArrowIcon fontSize='small' />}{running ? 'Pause' : 'Play'}
         </button>
-        <button onClick={reset} title='Create a new random 3D system'><RestartAltIcon fontSize='small' />Reset</button>
+        <button onClick={reset} title={`Create a new random ${dimensions}D system`}><RestartAltIcon fontSize='small' />Reset</button>
         <span className='toolbar-separator' />
         <button onClick={frameAll} aria-pressed={following} title='Fit all bodies and trails, and follow the system'>
           <CenterFocusStrongIcon fontSize='small' />Frame all

@@ -158,3 +158,71 @@ test('uneven render-frame boundaries do not cause a false precision-limit pause'
     assert.equal(s.isRunning(), true);
   }
 });
+
+
+test('4D inverse-cube gravity acts along W even when projected positions coincide', () => {
+  const close = system([body([0, 0, 0, -1], [0, 0, 0, 0]), body([0, 0, 0, 1], [0, 0, 0, 0])], { dimensions: 4 });
+  const far = system([body([0, 0, 0, -2], [0, 0, 0, 0]), body([0, 0, 0, 2], [0, 0, 0, 0])], { dimensions: 4 });
+  close.update(1e-5);
+  far.update(1e-5);
+  assert.equal(close.getDiagnostics().warning, null);
+  assert.ok(Math.abs(close.bodies[0].velocity[3] - 1.25e-6) < 1e-14);
+  assert.ok(Math.abs(close.bodies[0].velocity[3] / far.bodies[0].velocity[3] - 8) < 1e-8);
+  assert.deepEqual(close.bodies[0].position.slice(0, 3), [0, 0, 0]);
+  assert.ok(close.getDiagnostics().energyError < 1e-10);
+});
+
+test('4D circular motion follows the analytic inverse-cube orbit in an inclined plane', () => {
+  const u = [0.5, 0.5, 0.5, 0.5], v = [0.5, -0.5, 0.5, -0.5];
+  const omega = Math.sqrt(2) / 4; // relative radius 2: omega^2 = G(m1+m2)/r^4
+  const s = system([body(u.map(x => -x), v.map(x => -omega * x)),
+    body([...u], v.map(x => omega * x))], { dimensions: 4 });
+  const t = 2 * Math.PI / omega + 0.75;
+  advance(s, t);
+  const expected = u.map((x, axis) => -(x * Math.cos(omega * t) + v[axis] * Math.sin(omega * t)));
+  assert.ok(Math.hypot(...s.bodies[0].position.map((x, axis) => x - expected[axis])) < 1e-7);
+  assert.ok(Math.abs(separation(s) - 2) < 1e-7);
+  assert.ok(s.getDiagnostics().energyError < 1e-8); // Total energy is zero; normalization must remain finite.
+});
+
+test('4D five-body motion conserves energy and all six angular-momentum components', () => {
+  const s = system([
+    body([1, 1, 1, 1], [0.1, -0.2, 0.3, -0.4]),
+    body([-1, -1, 1, 0], [-0.3, 0.4, -0.1, 0.2], 2),
+    body([-1, 1, -1, 0.5], [0.2, -0.1, 0.4, 0.1], 0.5),
+    body([1, -1, -1, -0.5], [-0.2, 0.3, -0.4, 0.3], 1.5),
+    body([0.1, 0.3, 0.8, -1.5], [0.2, -0.1, -0.1, 0.2], 0.75),
+  ], { dimensions: 4 });
+  const invariants = () => {
+    const momentum = [0, 1, 2, 3].map(axis => s.bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0));
+    const angular = [];
+    for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) {
+      angular.push(s.bodies.reduce((sum, p) => sum + p.mass * (p.position[a] * p.velocity[b] - p.position[b] * p.velocity[a]), 0));
+    }
+    let energy = s.bodies.reduce((sum, p) => sum + 0.5 * p.mass * p.velocity.reduce((q, x) => q + x * x, 0), 0);
+    for (let i = 0; i < s.bodies.length; i++) for (let j = i + 1; j < s.bodies.length; j++) {
+      const r2 = s.bodies[i].position.reduce((sum, p, axis) => sum + (p - s.bodies[j].position[axis]) ** 2, 0);
+      energy -= s.config.G * s.bodies[i].mass * s.bodies[j].mass / (2 * r2);
+    }
+    return [...momentum, ...angular, energy];
+  };
+  const initial = invariants();
+  advance(s, 0.5);
+  invariants().forEach((value, i) => assert.ok(Math.abs(value - initial[i]) < 1e-9, `invariant ${i}`));
+  assert.ok(s.getDiagnostics().energyError < 1e-9);
+});
+
+test('switching spatial dimensions resets state, trails, and diagnostics coherently', () => {
+  const s = circular({ maxTrailLength: 10 });
+  s.update(0.01);
+  assert.ok(s.bodies[0].trail.length > 0);
+  s.setDimensions(4);
+  assert.equal(s.config.dimensions, 4);
+  assert.equal(s.getDiagnostics().time, 0);
+  assert.ok(s.bodies.every(b => b.position.length === 4 && b.velocity.length === 4 && b.trail.length === 0));
+  s.update(0.01);
+  assert.equal(s.getDiagnostics().warning, null);
+  s.setDimensions(3);
+  assert.ok(s.bodies.every(b => b.position.length === 3 && b.velocity.length === 3 && b.trail.length === 0));
+  assert.equal(s.getDiagnostics().time, 0);
+});

@@ -13,7 +13,7 @@ This simulation uses numerical integration to approximate the solution, renderin
 ## Features
 
 - Real-time physics simulation of two to five gravitational bodies
-- Full 3D positions, velocities, and gravity, with glowing spheres and fading spatial trails
+- Selectable 3D or 4D positions, velocities, and gravity, with glowing spheres and fading spatial trails
 - Drag-to-orbit camera, zoom, pan, automatic orbit, and frame-all tracking
 - Procedural starfield, depth grid, bloom lighting, and touch controls
 - Adjust simulation parameters like gravitational constant and time step
@@ -78,9 +78,40 @@ textures. Trail GPU buffers are reused. Rendering is capped at 60 fps and a 1.5
 pixel ratio. WebGL 2 is required; an unavailable or lost context shows a visible
 notice with a reload action. Resizing and fullscreen update the perspective view.
 
+## Spatial dimensions and the 4D view
+
+3D is the default. The dimension selector starts a new random system when changing
+between three and four **spatial** dimensions; time remains separate. A 4D body has
+four positions and four velocities, including a genuine W coordinate.
+
+The force law is the Gauss-law generalization of Newtonian gravity:
+`F_ij = G m_i m_j (r_j - r_i) / |r_j - r_i|^D`. Its magnitude is inverse-square
+in 3D and inverse-cube in 4D. The matching potential energy is
+`U_ij = -G m_i m_j / ((D - 2) r^(D - 2))`, so in 4D it is `-G m_i m_j / (2r^2)`.
+See the [Max Planck Institute's explanation of dimension-dependent force laws](https://eo.aei.mpg.de/en/spotlight/extra_dimensions_force/).
+
+G has different units in the two modes. On switching from 3D to 4D, the UI multiplies
+G by 200 (and divides by 200 on switching back), so the force magnitudes agree at
+a reference separation of 200 simulation units. The displayed G is the actual
+constant used by the solver; there is no hidden force normalization. Inverse-cube
+gravity can produce plunges and escapes, and a true singular encounter still pauses
+when it can no longer be resolved accurately.
+
+To draw 4D, the renderer rotates the full coordinates through the XW, YW, and ZW
+planes, in that order, then drops the rotated W component to form an orthographic
+3D shadow. The ordinary orbit camera then views that shadow. The projection sliders
+work while physics is paused and do not reset or alter the simulation. They can
+bring W into any visible axis. The body legend shows each body's original W value.
+This is a projection of the whole system, not a 3D slice through it.
+
+Trails retain all four physical coordinates; every point is reprojected with the
+current angles. Overlap in the projected view is not a physical collision. The
+orthographic projection has no perspective denominator or projection-plane
+singularity, and cannot expand distances beyond their 4D lengths.
+
 ## How It Works
 
-The simulation is based on Newton's law of universal gravitation, which states that every point mass attracts every other point mass by a force acting along the line intersecting the two points. The force is proportional to the product of the masses and inversely proportional to the square of the distance between them.
+The simulation is based on Newton's law of universal gravitation, which states that every point mass attracts every other point mass by a force acting along the line intersecting the two points. In the default 3D mode, the force is proportional to the product of the masses and inversely proportional to the square of the distance between them; the 4D mode uses the law described above.
 
 The physics engine uses an embedded Dormand-Prince 5(4) solver. Each candidate step
 estimates its local error; unacceptable steps are rejected and retried at a smaller
@@ -89,8 +120,8 @@ and `1e-11`. Pair-relative error scales avoid making a close binary less accurat
 when another body escapes far away. The standard method is described in the
 [SciPy RK45 documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.RK45.html).
 
-Each body's acceleration is calculated from Newtonian point-mass gravity in all
-three dimensions, using six state components (x, y, z, vx, vy, vz). Every
+Each body's acceleration is calculated from Newtonian point-mass gravity in
+the selected spatial dimensions, using six state components in 3D and eight in 4D. Every
 pair is evaluated once, applying equal and opposite forces. There is no softening,
 velocity clamp, artificial confinement, or energy rescaling. The rendered glows
 are visual markers, not collision surfaces.
@@ -132,7 +163,10 @@ three-body orbit, and agreement across different playback chunks. Additional che
 inclined analytic orbit, conservation of 3D angular momentum in a non-coplanar
 four-body system, and uneven render-frame boundaries that must not trigger a false
 precision-limit pause. They check analytic trajectories or conserved quantities,
-not only finite output values.
+not only finite output values. The 4D checks cover the inverse-cube force along W,
+an inclined analytic circular orbit, all six angular-momentum components, the
+correct potential energy, dimension-switch resets, and the rotation/projection
+geometry independently of the physics.
 
 ## License
 

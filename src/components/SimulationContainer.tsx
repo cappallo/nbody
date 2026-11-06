@@ -15,7 +15,9 @@ import {
   FormControlLabel,
 } from '@mui/material';
 import ThreeBodyCanvas from './ThreeBodyCanvas';
-import { ThreeBodyConfig } from '../physics/ThreeBodySystem';
+import type { ThreeBodyConfig, Dimensions } from '../physics/ThreeBodySystem';
+import { DEFAULT_PROJECTION } from '../graphics/projection';
+import type { ProjectionAngles } from '../graphics/projection';
 
 /**
  * Component that wraps the simulation canvas with controls and information
@@ -32,6 +34,7 @@ const SimulationContainer: React.FC = () => {
 
   // Configuration state for the simulation
   const [config, setConfig] = useState<Partial<ThreeBodyConfig>>({
+    dimensions: 3,
     G: 1000,
     dt: 0.03,
     speedMultiplier: 1.0,
@@ -40,6 +43,17 @@ const SimulationContainer: React.FC = () => {
     maxTrailLength: 500,
     numBodies: 3, // Default to 3 bodies
   });
+
+  const dimensions = config.dimensions ?? 3;
+  const [projection, setProjection] = useState<ProjectionAngles>(DEFAULT_PROJECTION);
+  const changeDimensions = (next: Dimensions) => {
+    setConfig(prev => {
+      if ((prev.dimensions ?? 3) === next) return prev;
+      // Different dimensions give G different units. Match force magnitudes at r = 200.
+      const scale = next === 4 ? 200 : 1 / 200;
+      return { ...prev, dimensions: next, G: (prev.G ?? 1000) * scale };
+    });
+  };
 
   /**
    * Handle change of the gravitational constant
@@ -133,7 +147,7 @@ const SimulationContainer: React.FC = () => {
 
   return (
     <Container maxWidth='lg' sx={{ py: { xs: 3, sm: 4 } }}>
-      <Typography className='page-kicker' align='center'>NEWTONIAN GRAVITY &nbsp; / &nbsp; THREE DIMENSIONS</Typography>
+      <Typography className='page-kicker' align='center'>NEWTONIAN GRAVITY &nbsp; / &nbsp; {dimensions === 4 ? 'FOUR SPATIAL DIMENSIONS' : 'THREE DIMENSIONS'}</Typography>
       <Typography
         variant='h3'
         component='h1'
@@ -152,16 +166,46 @@ const SimulationContainer: React.FC = () => {
       </Typography>
 
       <Typography align='center' sx={{ color: '#9ca8bf', maxWidth: 700, mx: 'auto', mb: 3, lineHeight: 1.7 }}>
-        Follow two to five bodies through three-dimensional space.<br />
+        {dimensions === 4 ? 'Four spatial dimensions, seen as a rotatable three-dimensional shadow.' : 'Follow two to five bodies through three-dimensional space.'}<br />
         Drag to explore the system from any angle, or let the camera orbit for you.
       </Typography>
+
+      <div className='dimension-row'>
+        <div className='dimension-picker' role='group' aria-label='Spatial dimensions'>
+          <button aria-pressed={dimensions === 3} onClick={() => changeDimensions(3)}>3D</button>
+          <button aria-pressed={dimensions === 4} onClick={() => changeDimensions(4)}>4D</button>
+        </div>
+        <span>{dimensions === 4 ? 'x, y, z, w / inverse-cube gravity' : 'x, y, z / inverse-square gravity'}</span>
+        <small>Switching dimensions starts a new system.</small>
+      </div>
+      {dimensions === 4 && <section className='hyper-controls' aria-label='4D projection controls'>
+        <div className='hyper-intro'>
+          <strong>Explore the fourth dimension</strong>
+          <span>Mix w into the visible axes. These rotations change only the view, even while paused.</span>
+          <button onClick={() => setProjection(DEFAULT_PROJECTION)}>Reset projection</button>
+        </div>
+        <div className='hyper-sliders'>
+          {['XW', 'YW', 'ZW'].map((plane, axis) => <div key={plane}>
+            <label id={`projection-${plane}`}>{plane} rotation <span>{projection[axis]}&deg;</span></label>
+            <Slider aria-labelledby={`projection-${plane}`} min={-180} max={180} step={1}
+              value={projection[axis]} valueLabelDisplay='auto'
+              getAriaValueText={value => `${value} degrees`}
+              onChange={(_, value) => setProjection(prev => {
+                const next: [number, number, number] = [...prev];
+                next[axis] = value as number;
+                return next;
+              })} sx={{ color: '#ae9cff' }} />
+          </div>)}
+        </div>
+        <p>W is another spatial direction; time stays separate. The scene is a projection, not a 3D slice.</p>
+      </section>}
 
       <Box
         component='div'
         sx={{
           flexGrow: 1,
           width: '100%',
-          height: 'min(68vh, 760px)',
+          height: dimensions === 4 ? 'min(58vh, 650px)' : 'min(68vh, 760px)',
           minHeight: { xs: '500px', sm: '540px' },
           bgcolor: 'background.paper',
           boxShadow: 3,
@@ -171,7 +215,7 @@ const SimulationContainer: React.FC = () => {
           overflow: 'hidden',
         }}
       >
-        <ThreeBodyCanvas width={canvasSize.width} height={canvasSize.height} config={config} onReset={handleReset} />
+        <ThreeBodyCanvas width={canvasSize.width} height={canvasSize.height} config={config} onReset={handleReset} projection={projection} />
       </Box>
 
       <Typography className='view-help'>
@@ -287,13 +331,16 @@ const SimulationContainer: React.FC = () => {
 
           <Box>
             <Typography id='g-constant-slider' gutterBottom>
-              Gravitational Constant: {config.G}
+              Gravitational Constant ({dimensions}D): {config.G?.toLocaleString()}
             </Typography>
+            {dimensions === 4 && <Typography variant='caption' sx={{ display: 'block', color: '#93a1b8', mb: 1 }}>
+              4D G has different units. Switching modes rescales it so force strengths match at a distance of 200 units.
+            </Typography>}
             <Slider
               aria-labelledby='g-constant-slider'
-              min={100}
-              max={5000}
-              step={100}
+              min={dimensions === 4 ? 20000 : 100}
+              max={dimensions === 4 ? 1000000 : 5000}
+              step={dimensions === 4 ? 20000 : 100}
               value={config.G ?? 1000}
               onChange={handleGConstantChange}
               sx={{
@@ -361,7 +408,7 @@ const SimulationContainer: React.FC = () => {
           </FormControl>
         </Stack>
         <Typography variant='body2' sx={{ mt: 3, color: '#93a1b8', lineHeight: 1.7 }}>
-          Gravity and motion are calculated in all three dimensions. Close encounters use smaller, error-controlled steps;
+          Gravity and motion are calculated in {dimensions} spatial dimensions, with {dimensions === 4 ? 'inverse-cube' : 'inverse-square'} gravity. Close encounters use smaller, error-controlled steps;
           real gravitational slingshots can still eject a body. The spheres are visual markers for point masses,
           so their glowing surfaces do not collide. Reset generates a new system.
         </Typography>

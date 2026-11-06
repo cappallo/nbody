@@ -7,7 +7,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import type { Body } from '../physics/ThreeBodySystem';
+import type { Body, Vector3 } from '../physics/ThreeBodySystem';
+import { createProjection, projectPoint, DEFAULT_PROJECTION } from './projection';
+import type { ProjectionAngles } from './projection';
 
 const TRAIL_CAPACITY = 2000;
 interface BodyVisual {
@@ -87,6 +89,8 @@ export class SpaceRenderer {
   private size = new THREE.Vector3();
   private offset = new THREE.Vector3();
   private point = new THREE.Vector3();
+  private projected: Vector3 = [0, 0, 0];
+  private projection = createProjection(DEFAULT_PROJECTION);
   private width = 1;
   private height = 1;
   private onStart: () => void;
@@ -236,11 +240,17 @@ export class SpaceRenderer {
     this.composer.setSize(this.width, this.height);
   }
 
+  public setProjection(angles: ProjectionAngles): void { this.projection = createProjection(angles); }
+
+  private project(position: readonly number[]): THREE.Vector3 {
+    return this.point.fromArray(projectPoint(position, this.projection, this.projected));
+  }
+
   private measure(bodies: Body[]): number {
     this.bounds.makeEmpty();
     for (const body of bodies) {
-      this.bounds.expandByPoint(this.point.fromArray(body.position));
-      for (const p of body.trail) this.bounds.expandByPoint(this.point.fromArray(p));
+      this.bounds.expandByPoint(this.project(body.position));
+      for (const p of body.trail) this.bounds.expandByPoint(this.project(p));
     }
     this.bounds.getCenter(this.center);
     this.bounds.getSize(this.size);
@@ -272,7 +282,7 @@ export class SpaceRenderer {
     }
     bodies.forEach((body, i) => {
       const v = this.visuals[i];
-      v.group.position.fromArray(body.position);
+      v.group.position.copy(this.project(body.position));
       v.group.scale.setScalar(body.radius);
       v.core.material.uniforms.time.value = time;
       const count = Math.min(body.trail.length, TRAIL_CAPACITY);
@@ -281,7 +291,7 @@ export class SpaceRenderer {
       v.trail.geometry.instanceCount = Math.max(0, count - 1);
       for (let j = 0; j < count - 1; j++) {
         for (let end = 0; end < 2; end++) {
-          const p = body.trail[start + j + end];
+          const p = projectPoint(body.trail[start + j + end], this.projection, this.projected);
           const intensity = 0.02 + 2.3 * ((j + end) / Math.max(1, count - 1)) ** 1.8;
           for (let axis = 0; axis < 3; axis++) {
             v.positions.array[j * 6 + end * 3 + axis] = p[axis];
