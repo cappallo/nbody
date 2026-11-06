@@ -1,19 +1,21 @@
+export type Vector3 = [number, number, number];
+
 /**
  * Represents a celestial body in the simulation
  */
 export interface Body {
   /** Mass of the body */
   mass: number;
-  /** Position vector [x, y] */
-  position: [number, number];
-  /** Velocity vector [vx, vy] */
-  velocity: [number, number];
+  /** Position vector [x, y, z] */
+  position: Vector3;
+  /** Velocity vector [vx, vy, vz] */
+  velocity: Vector3;
   /** Color for rendering */
   color: string;
   /** Radius for rendering (proportional to mass) */
   radius: number;
   /** Trail positions for visualization */
-  trail: Array<[number, number]>;
+  trail: Vector3[];
 }
 
 /**
@@ -98,24 +100,30 @@ export class ThreeBodySystem {
     const random = (min: number, max: number) => min + Math.random() * (max - min);
     const colors = ['#FF5252', '#4CAF50', '#2196F3', '#9C27B0', '#FFC107'];
     const bodies: Body[] = Array.from({ length: c.numBodies }, (_, i) => {
-      const angle = i * 2 * Math.PI / c.numBodies + random(-0.3, 0.3);
-      const distance = random(Math.min(c.canvasWidth, c.canvasHeight) * 0.2,
-        Math.min(c.canvasWidth, c.canvasHeight) * 0.35);
+      const angle = i * Math.PI * (3 - Math.sqrt(5)) + random(-0.2, 0.2);
+      const cosTheta = Math.max(-0.95, Math.min(0.95, 1 - 2 * (i + 0.5) / c.numBodies + random(-0.1, 0.1)));
+      const sinTheta = Math.sqrt(1 - cosTheta * cosTheta);
+      const distance = random(Math.min(c.canvasWidth, c.canvasHeight) * 0.25,
+        Math.min(c.canvasWidth, c.canvasHeight) * 0.4);
       const mass = Math.pow(10, random(c.minMass, c.maxMass));
       return {
         mass,
-        position: [c.canvasWidth / 2 + distance * Math.cos(angle),
-          c.canvasHeight / 2 + distance * Math.sin(angle)],
-        velocity: [random(c.minVelocity, c.maxVelocity), random(c.minVelocity, c.maxVelocity)],
-        color: colors[i % colors.length], radius: 5 + Math.sqrt(mass) * 2, trail: [],
+        position: [distance * sinTheta * Math.cos(angle), distance * cosTheta,
+          distance * sinTheta * Math.sin(angle)],
+        velocity: [random(c.minVelocity, c.maxVelocity), random(c.minVelocity, c.maxVelocity),
+          random(c.minVelocity, c.maxVelocity)],
+        color: colors[i % colors.length], radius: 5 + Math.cbrt(mass) * 1.1, trail: [],
       };
     });
-    // Remove bulk translation once at initialization; do not alter later dynamics.
+    // Choose the center-of-mass frame once; do not alter later dynamics.
     const mass = bodies.reduce((sum, b) => sum + b.mass, 0);
-    const velocity = [0, 1].map(axis => bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass);
-    for (const b of bodies) {
-      b.velocity[0] -= velocity[0];
-      b.velocity[1] -= velocity[1];
+    for (let axis = 0; axis < 3; axis++) {
+      const center = bodies.reduce((sum, b) => sum + b.mass * b.position[axis], 0) / mass;
+      const velocity = bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass;
+      for (const b of bodies) {
+        b.position[axis] -= center;
+        b.velocity[axis] -= velocity;
+      }
     }
     return bodies;
   }
@@ -129,26 +137,22 @@ export class ThreeBodySystem {
     this.diagnostics = { time: 0, energyError: 0, steps: 0, rejectedSteps: 0, slowed: false, warning: null };
   }
 
-  /** State layout is x, y, vx, vy per body. Evaluate each pair once. */
+  /** State layout is x, y, z, vx, vy, vz per body. Evaluate each pair once. */
   private derivative(state: number[]): number[] {
     const result = new Array<number>(state.length).fill(0);
     for (let i = 0; i < this.bodies.length; i++) {
-      const a = i * 4;
-      result[a] = state[a + 2];
-      result[a + 1] = state[a + 3];
+      const a = i * 6;
+      for (let axis = 0; axis < 3; axis++) result[a + axis] = state[a + 3 + axis];
       for (let j = i + 1; j < this.bodies.length; j++) {
-        const b = j * 4;
-        const dx = state[b] - state[a];
-        const dy = state[b + 1] - state[a + 1];
-        const r = Math.hypot(dx, dy);
+        const b = j * 6;
+        const r = Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1], state[b + 2] - state[a + 2]);
         if (!(r > 0)) return result.fill(NaN); // Exact point collision is singular.
         const factor = this.config.G / r / r / r;
-        const fx = factor * dx;
-        const fy = factor * dy;
-        result[a + 2] += this.bodies[j].mass * fx;
-        result[a + 3] += this.bodies[j].mass * fy;
-        result[b + 2] -= this.bodies[i].mass * fx;
-        result[b + 3] -= this.bodies[i].mass * fy;
+        for (let axis = 0; axis < 3; axis++) {
+          const force = factor * (state[b + axis] - state[a + axis]);
+          result[a + 3 + axis] += this.bodies[j].mass * force;
+          result[b + 3 + axis] -= this.bodies[i].mass * force;
+        }
       }
     }
     return result;
@@ -163,9 +167,9 @@ export class ThreeBodySystem {
       ? Math.min(0.05, Math.max(0.001, this.config.maxPositionChangeRatio)) : 0.05;
     for (let i = 0; i < this.bodies.length; i++) {
       for (let j = i + 1; j < this.bodies.length; j++) {
-        const a = 4 * i, b = 4 * j;
-        const r = Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1]);
-        const v = Math.hypot(state[b + 2] - state[a + 2], state[b + 3] - state[a + 3]);
+        const a = 6 * i, b = 6 * j;
+        const r = Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1], state[b + 2] - state[a + 2]);
+        const v = Math.hypot(state[b + 3] - state[a + 3], state[b + 4] - state[a + 4], state[b + 5] - state[a + 5]);
         const mu = this.config.G * (this.bodies[i].mass + this.bodies[j].mass);
         limit = Math.min(limit, fraction * Math.min(v > 0 ? r / v : Infinity,
           mu > 0 ? r * Math.sqrt(r / mu) : Infinity));
@@ -187,14 +191,14 @@ export class ThreeBodySystem {
     // In particular, a distant escaping body cannot relax a close binary's tolerance.
     for (let i = 0; i < this.bodies.length; i++) {
       for (let j = i + 1; j < this.bodies.length; j++) {
-        const a = i * 4, b = j * 4;
-        const r = Math.max(Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1]),
-          Math.hypot(candidate[b] - candidate[a], candidate[b + 1] - candidate[a + 1]));
-        const v = Math.max(Math.hypot(state[b + 2] - state[a + 2], state[b + 3] - state[a + 3]),
-          Math.hypot(candidate[b + 2] - candidate[a + 2], candidate[b + 3] - candidate[a + 3]),
+        const a = i * 6, b = j * 6;
+        const r = Math.max(Math.hypot(state[b] - state[a], state[b + 1] - state[a + 1], state[b + 2] - state[a + 2]),
+          Math.hypot(candidate[b] - candidate[a], candidate[b + 1] - candidate[a + 1], candidate[b + 2] - candidate[a + 2]));
+        const v = Math.max(Math.hypot(state[b + 3] - state[a + 3], state[b + 4] - state[a + 4], state[b + 5] - state[a + 5]),
+          Math.hypot(candidate[b + 3] - candidate[a + 3], candidate[b + 4] - candidate[a + 4], candidate[b + 5] - candidate[a + 5]),
           Math.sqrt(this.config.G * (this.bodies[i].mass + this.bodies[j].mass) / r));
-        for (let k = 0; k < 4; k++) {
-          error = Math.max(error, Math.abs(errors[b + k] - errors[a + k]) / (ATOL + RTOL * (k < 2 ? r : v)));
+        for (let k = 0; k < 6; k++) {
+          error = Math.max(error, Math.abs(errors[b + k] - errors[a + k]) / (ATOL + RTOL * (k < 3 ? r : v)));
         }
       }
     }
@@ -228,10 +232,13 @@ export class ThreeBodySystem {
     this.diagnostics.slowed = false;
     while (elapsed < duration && attempts++ < MAX_ATTEMPTS) {
       const remaining = duration - elapsed;
-      const h = Math.min(remaining, this.nextStep, this.encounterStep(state));
-      // Stop rather than enlarge an unresolvable step. Never write non-finite state.
       const resolution = 16 * Number.EPSILON * Math.max(1, this.diagnostics.time);
-      if (!(h > 0) || !Number.isFinite(h) || (h < resolution && remaining > resolution)) {
+      // Ignore a sub-resolution frame-end remainder; it is not a physical encounter.
+      if (remaining <= resolution) break;
+      const proposed = Math.min(this.nextStep, this.encounterStep(state));
+      const h = Math.min(remaining, proposed);
+      // Stop rather than enlarge an unresolvable physical step. Never write non-finite state.
+      if (!(h > 0) || !Number.isFinite(h) || h < resolution) {
         this.stopWithWarning('Point-mass collision or precision limit reached. Reset to begin again.');
         break;
       }
@@ -242,17 +249,19 @@ export class ThreeBodySystem {
         this.diagnostics.rejectedSteps++;
         continue;
       }
+      // A short frame boundary must not poison the next frame's step-size proposal.
+      if (h === remaining && factor >= 1) this.nextStep = Math.max(this.nextStep, proposed);
       state = result.state;
       elapsed += h;
       this.diagnostics.time += h;
       this.effectiveTimeStep = h;
       this.diagnostics.steps++;
     }
-    this.diagnostics.slowed = elapsed < duration && !this.diagnostics.warning;
+    this.diagnostics.slowed = duration - elapsed > 16 * Number.EPSILON * Math.max(1, this.diagnostics.time) && !this.diagnostics.warning;
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
-      b.position = [state[4 * i], state[4 * i + 1]];
-      b.velocity = [state[4 * i + 2], state[4 * i + 3]];
+      b.position = [state[6 * i], state[6 * i + 1], state[6 * i + 2]];
+      b.velocity = [state[6 * i + 3], state[6 * i + 4], state[6 * i + 5]];
       // Sample trails by playback updates, not by tiny internal solver steps.
       if (elapsed > 0) b.trail.push([...b.position]);
       const excess = b.trail.length - this.config.maxTrailLength;
@@ -266,14 +275,14 @@ export class ThreeBodySystem {
   /** Energy in the center-of-mass frame; normalize by K + |U|, not near-zero E. */
   private energy(): { total: number; scale: number } {
     const mass = this.bodies.reduce((sum, b) => sum + b.mass, 0);
-    const velocity = [0, 1].map(axis => this.bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass);
+    const velocity = [0, 1, 2].map(axis => this.bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0) / mass);
     let kinetic = 0, potential = 0;
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
-      kinetic += 0.5 * b.mass * ((b.velocity[0] - velocity[0]) ** 2 + (b.velocity[1] - velocity[1]) ** 2);
+      kinetic += 0.5 * b.mass * b.velocity.reduce((sum, v, axis) => sum + (v - velocity[axis]) ** 2, 0);
       for (let j = i + 1; j < this.bodies.length; j++) {
         const other = this.bodies[j];
-        const r = Math.hypot(other.position[0] - b.position[0], other.position[1] - b.position[1]);
+        const r = Math.hypot(other.position[0] - b.position[0], other.position[1] - b.position[1], other.position[2] - b.position[2]);
         if (r === 0) return { total: 0, scale: 1 }; // Undefined at a collision; solver pauses.
         potential -= this.config.G * b.mass * other.mass / r;
       }

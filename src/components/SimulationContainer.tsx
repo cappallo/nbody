@@ -132,7 +132,8 @@ const SimulationContainer: React.FC = () => {
   };
 
   return (
-    <Container maxWidth='lg' sx={{ py: 4 }}>
+    <Container maxWidth='lg' sx={{ py: { xs: 3, sm: 4 } }}>
+      <Typography className='page-kicker' align='center'>NEWTONIAN GRAVITY &nbsp; / &nbsp; THREE DIMENSIONS</Typography>
       <Typography
         variant='h3'
         component='h1'
@@ -144,41 +145,24 @@ const SimulationContainer: React.FC = () => {
           background: 'linear-gradient(45deg, #FE6B8B 30%, #FF8E53 90%)',
           backgroundClip: 'text',
           textFillColor: 'transparent',
-          mb: 4,
+          mb: 1.5,
         }}
       >
         N-Body Problem Simulation
       </Typography>
 
-      <Paper
-        elevation={3}
-        sx={{
-          p: 2,
-          mb: 4,
-          background: 'rgba(25, 25, 25, 0.8)',
-          color: 'white',
-          borderRadius: 2,
-        }}
-      >
-        <Typography variant='body1' paragraph>
-          The n-body problem is a classical physics problem that involves predicting the motion of n objects interacting
-          through gravitational forces. Unlike the two-body problem, which has a closed-form solution, the n-body
-          problem (where n ≥ 3) cannot be solved analytically for most initial conditions and exhibits chaotic behavior.
-        </Typography>
-        <Typography variant='body1'>
-          Each reset creates random masses and velocities. The solver automatically takes smaller steps during close
-          encounters and checks its numerical error. Real gravitational slingshots can still eject a body; the energy
-          readout helps distinguish that behavior from numerical drift. Drag to pan, scroll to zoom, or use Auto-Follow.
-        </Typography>
-      </Paper>
+      <Typography align='center' sx={{ color: '#9ca8bf', maxWidth: 700, mx: 'auto', mb: 3, lineHeight: 1.7 }}>
+        Follow two to five bodies through three-dimensional space.<br />
+        Drag to explore the system from any angle, or let the camera orbit for you.
+      </Typography>
 
       <Box
         component='div'
         sx={{
           flexGrow: 1,
           width: '100%',
-          height: '50vh',
-          minHeight: '400px',
+          height: 'min(68vh, 760px)',
+          minHeight: { xs: '500px', sm: '540px' },
           bgcolor: 'background.paper',
           boxShadow: 3,
           borderRadius: 2,
@@ -190,11 +174,17 @@ const SimulationContainer: React.FC = () => {
         <ThreeBodyCanvas width={canvasSize.width} height={canvasSize.height} config={config} onReset={handleReset} />
       </Box>
 
+      <Typography className='view-help'>
+        <span>Drag to orbit &nbsp; &middot; &nbsp; Scroll to zoom &nbsp; &middot; &nbsp; Right-drag to pan</span>
+        <span>Touch: one finger to orbit, pinch to zoom</span>
+      </Typography>
+
       <Paper
         elevation={3}
         sx={{
           p: 3,
-          background: 'rgba(25, 25, 25, 0.8)',
+          background: 'rgba(14, 19, 32, 0.85)',
+          border: '1px solid rgba(154, 178, 232, 0.1)',
           color: 'white',
           borderRadius: 2,
         }}
@@ -370,6 +360,11 @@ const SimulationContainer: React.FC = () => {
             </Select>
           </FormControl>
         </Stack>
+        <Typography variant='body2' sx={{ mt: 3, color: '#93a1b8', lineHeight: 1.7 }}>
+          Gravity and motion are calculated in all three dimensions. Close encounters use smaller, error-controlled steps;
+          real gravitational slingshots can still eject a body. The spheres are visual markers for point masses,
+          so their glowing surfaces do not collide. Reset generates a new system.
+        </Typography>
       </Paper>
     </Container>
   );

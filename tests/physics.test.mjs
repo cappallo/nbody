@@ -12,7 +12,8 @@ const config = {
   minVelocity: -1, maxVelocity: 1, numBodies: 2,
 };
 function body(position, velocity, mass = 1) {
-  return { mass, position, velocity, radius: 5, color: '#ffffff', trail: [] };
+  return { mass, position: position.length === 2 ? [...position, 0] : position,
+    velocity: velocity.length === 2 ? [...velocity, 0] : velocity, radius: 5, color: '#ffffff', trail: [] };
 }
 function system(bodies, overrides = {}) {
   const s = new ThreeBodySystem({ ...config, ...overrides, numBodies: bodies.length });
@@ -110,4 +111,50 @@ test('different playback chunks and speed settings agree at the same physical ti
   const before = structuredClone(a.bodies);
   assert.equal(a.update(1), 0);
   assert.deepEqual(a.bodies, before);
+});
+
+
+test('inclined circular binary follows the analytic orbit in all three dimensions', () => {
+  const u = [1 / Math.sqrt(2), 1 / Math.sqrt(2), 0];
+  const v = [-1 / Math.sqrt(6), 1 / Math.sqrt(6), 2 / Math.sqrt(6)];
+  const s = system([body(u.map(x => -0.5 * x), v.map(x => -Math.SQRT1_2 * x)),
+    body(u.map(x => 0.5 * x), v.map(x => Math.SQRT1_2 * x))]);
+  const t = 10 * 2 * Math.PI / Math.sqrt(2) + 0.75;
+  advance(s, t);
+  const theta = Math.sqrt(2) * t;
+  const expected = u.map((x, axis) => -0.5 * (x * Math.cos(theta) + v[axis] * Math.sin(theta)));
+  assert.ok(Math.hypot(...s.bodies[0].position.map((x, axis) => x - expected[axis])) < 1e-7);
+  assert.ok(Math.abs(s.bodies[0].position[2]) > 0.1);
+  assert.ok(s.getDiagnostics().energyError < 1e-8);
+});
+
+test('non-coplanar four-body system conserves 3D momentum, angular momentum, and energy', () => {
+  const s = system([
+    body([1, 1, 1], [0.1, -0.2, 0.3]), body([-1, -1, 1], [-0.3, 0.4, -0.1], 2),
+    body([-1, 1, -1], [0.2, -0.1, 0.4], 0.5), body([1, -1, -1], [-0.2, 0.3, -0.4], 1.5),
+  ]);
+  const invariants = () => {
+    const momentum = [0, 1, 2].map(axis => s.bodies.reduce((sum, b) => sum + b.mass * b.velocity[axis], 0));
+    const angular = [0, 1, 2].map(axis => {
+      const j = (axis + 1) % 3, k = (axis + 2) % 3;
+      return s.bodies.reduce((sum, b) => sum + b.mass * (b.position[j] * b.velocity[k] - b.position[k] * b.velocity[j]), 0);
+    });
+    return [...momentum, ...angular];
+  };
+  const initial = invariants();
+  advance(s, 2);
+  invariants().forEach((x, i) => assert.ok(Math.abs(x - initial[i]) < 1e-8));
+  assert.ok(s.getDiagnostics().energyError < 1e-8);
+});
+
+
+test('uneven render-frame boundaries do not cause a false precision-limit pause', () => {
+  const s = system([body([-300, 0, 0], [0.5, 0, 0]), body([300, 0, 0], [-0.5, 0, 0])],
+    { G: 100, dt: 0.03 });
+  const intervals = [0.05 * 1.8, 0.02994, 0.03006, 0.03168, 0.0288, 0.0306];
+  for (let i = 0; i < 300; i++) {
+    s.update(intervals[i % intervals.length]);
+    assert.equal(s.getDiagnostics().warning, null, `frame ${i}`);
+    assert.equal(s.isRunning(), true);
+  }
 });

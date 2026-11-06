@@ -1,967 +1,241 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ThreeBodySystem, ThreeBodyConfig, Body, Diagnostics } from '../physics/ThreeBodySystem';
-// Import Material UI icons
+import { useEffect, useRef, useState } from 'react';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import ThreeSixtyIcon from '@mui/icons-material/ThreeSixty';
+import GridOnIcon from '@mui/icons-material/GridOn';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
-import GridOnIcon from '@mui/icons-material/GridOn';
-import GridOffIcon from '@mui/icons-material/GridOff';
+import { ThreeBodySystem } from '../physics/ThreeBodySystem';
+import type { Diagnostics, ThreeBodyConfig } from '../physics/ThreeBodySystem';
+import { SpaceRenderer } from '../graphics/SpaceRenderer';
 
-/**
- * Props for ThreeBodyCanvas component
- */
-interface ThreeBodyCanvasProps {
-  /** Initial width of the canvas */
+interface Props {
   width: number;
-  /** Initial height of the canvas */
   height: number;
-  /** Configuration options for simulation */
   config?: Partial<ThreeBodyConfig>;
-  /** Callback when simulation is reset */
   onReset?: () => void;
 }
 
-/**
- * Camera state for the simulation view
- */
-interface CameraState {
-  /** X offset of the camera */
-  x: number;
-  /** Y offset of the camera */
-  y: number;
-  /** Zoom level (1 = 100%) */
-  zoom: number;
-  /** Whether auto-follow is enabled */
-  autoFollow: boolean;
-}
-
-/**
- * Component that renders the n-body problem animation using Canvas
- */
-const ThreeBodyCanvas: React.FC<ThreeBodyCanvasProps> = ({
-  width: initialWidth,
-  height: initialHeight,
-  config = {},
-  onReset,
-}) => {
-  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
-  const lastTimestampRef = useRef<number | null>(null);
-
-  // Canvas dimensions state
-  const [canvasDimensions, setCanvasDimensions] = useState({ width: initialWidth, height: initialHeight });
-
-  // Canvas reference
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Animation frame reference
-  const animationFrameRef = useRef<number | null>(null);
-  // Reference to the system
+export default function ThreeBodyCanvas({ width, height, config = {}, onReset }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const systemRef = useRef<ThreeBodySystem | null>(null);
-  // FPS counter - use ref instead of state to avoid re-render cycles
-  const fpsRef = useRef<number>(0);
-  // Frame timing references
-  const frameTimeRef = useRef<number>(0);
-  const frameCountRef = useRef<number>(0);
-  // Running state for UI updates
-  const [isRunning, setIsRunning] = useState<boolean>(true);
-  // Fullscreen state
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  // Grid visibility state
-  const [showGrid, setShowGrid] = useState<boolean>(true);
-  // Use a ref for grid visibility to ensure animation loop has latest value
-  const showGridRef = useRef<boolean>(true);
-  // Container reference for fullscreen
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const rendererRef = useRef<SpaceRenderer | null>(null);
+  const initialConfig = useRef(config);
+  const [running, setRunning] = useState(true);
+  const [following, setFollowing] = useState(true);
+  const [orbiting, setOrbiting] = useState(() => !window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [grid, setGrid] = useState(true);
+  const [glow, setGlow] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [stats, setStats] = useState<{ diagnostics: Diagnostics; fps: number; step: number } | null>(null);
 
-  // Camera state - we'll use both ref and state
-  const cameraRef = useRef<CameraState>({
-    x: 0,
-    y: 0,
-    zoom: 1,
-    autoFollow: true,
-  });
-
-  // React state for UI updates
-  const [camera, setCamera] = useState<CameraState>(cameraRef.current);
-
-  // Update interval ref (for forcing re-renders)
-  const updateIntervalRef = useRef<number | null>(null);
-
-  // Track mouse state for dragging
-  const dragRef = useRef({
-    isDragging: false,
-    lastX: 0,
-    lastY: 0,
-  });
-
-  /**
-   * Calculate the bounding box for all bodies
-   * @param bodies Array of bodies to calculate bounds for
-   * @returns The bounding box with padding
-   */
-  const calculateBoundingBox = useCallback(
-    (bodies: Body[]) => {
-      const width = canvasRef.current?.clientWidth || canvasDimensions.width;
-      const height = canvasRef.current?.clientHeight || canvasDimensions.height;
-
-      if (!bodies.length)
-        return { minX: -width / 2, maxX: width / 2, minY: -height / 2, maxY: height / 2, centerX: 0, centerY: 0 };
-
-      // Find min/max coordinates including trail positions
-      let minX = Infinity;
-      let maxX = -Infinity;
-      let minY = Infinity;
-      let maxY = -Infinity;
-
-      const bodiesToUse = bodies;
-
-      // Calculate bounds including trail positions
-      bodiesToUse.forEach((body) => {
-        // Include current position
-        minX = Math.min(minX, body.position[0]);
-        maxX = Math.max(maxX, body.position[0]);
-        minY = Math.min(minY, body.position[1]);
-        maxY = Math.max(maxY, body.position[1]);
-
-        // Include trail positions
-        body.trail.forEach((pos) => {
-          minX = Math.min(minX, pos[0]);
-          maxX = Math.max(maxX, pos[0]);
-          minY = Math.min(minY, pos[1]);
-          maxY = Math.max(maxY, pos[1]);
-        });
-      });
-
-      // Add padding (20% of dimensions)
-      const paddingX = Math.max((maxX - minX) * 0.2, 50);
-      const paddingY = Math.max((maxY - minY) * 0.2, 50);
-
-      minX -= paddingX;
-      maxX += paddingX;
-      minY -= paddingY;
-      maxY += paddingY;
-
-      // Ensure minimum size to prevent extreme zoom
-      const minWidth = width * 0.2;
-      const minHeight = height * 0.2;
-
-      if (maxX - minX < minWidth) {
-        const center = (minX + maxX) / 2;
-        minX = center - minWidth / 2;
-        maxX = center + minWidth / 2;
-      }
-
-      if (maxY - minY < minHeight) {
-        const center = (minY + maxY) / 2;
-        minY = center - minHeight / 2;
-        maxY = center + minHeight / 2;
-      }
-
-      return {
-        minX,
-        maxX,
-        minY,
-        maxY,
-        centerX: (minX + maxX) / 2,
-        centerY: (minY + maxY) / 2,
-      };
-    },
-    [canvasDimensions]
-  );
-
-  /**
-   * Update camera to follow the bodies if auto-follow is enabled
-   * @param bodies The bodies to follow
-   */
-  const updateCamera = useCallback(
-    (bodies: Body[]) => {
-      if (!cameraRef.current.autoFollow) return;
-
-      // Get fresh dimensions directly from the container if possible
-      // This ensures we're using the most up-to-date dimensions
-      let width = canvasDimensions.width;
-      let height = canvasDimensions.height;
-
-      // Try to get live dimensions from container
-      if (containerRef.current) {
-        const containerRect = containerRef.current.getBoundingClientRect();
-        width = containerRect.width;
-        height = containerRect.height;
-      }
-
-      const bounds = calculateBoundingBox(bodies);
-
-      // Calculate target zoom
-      const contentWidth = bounds.maxX - bounds.minX;
-      const contentHeight = bounds.maxY - bounds.minY;
-
-      // Adjust zoom based on actual container dimensions
-      const zoomX = width / contentWidth;
-      const zoomY = height / contentHeight;
-
-      // Target zoom should adapt to both dimensions, but not exceed 1.0
-      const targetZoom = Math.min(zoomX, zoomY, 1); // Limit max zoom to 1x
-
-      // Smoothly interpolate camera position and zoom
-      // Use a more responsive smoothing factor when dimensions change significantly
-      const smoothingFactor = 0.1; // Increased for more responsive movement
-
-      // Update the camera ref directly (UI updates via interval)
-      const prevCamera = cameraRef.current;
-      const newZoom = prevCamera.zoom + (targetZoom - prevCamera.zoom) * smoothingFactor;
-
-      // Calculate target center position
-      const targetX = width / 2 - bounds.centerX * newZoom;
-      const targetY = height / 2 - bounds.centerY * newZoom;
-
-      // Smoothly move towards target position
-      const newX = prevCamera.x + (targetX - prevCamera.x) * smoothingFactor;
-      const newY = prevCamera.y + (targetY - prevCamera.y) * smoothingFactor;
-
-      // Update camera ref
-      cameraRef.current = {
-        x: newX,
-        y: newY,
-        zoom: newZoom,
-        autoFollow: prevCamera.autoFollow,
-      };
-    },
-    [calculateBoundingBox, canvasDimensions]
-  );
-
-  // Set up resize observer to adapt canvas to container
   useEffect(() => {
-    if (!containerRef.current || !canvasRef.current) return;
-
-    // Function to update canvas dimensions based on container size
-    const updateCanvasSize = () => {
-      if (!containerRef.current || !canvasRef.current) return;
-
-      const containerRect = containerRef.current.getBoundingClientRect();
-
-      const newWidth = containerRect.width;
-      const newHeight = containerRect.height;
-
-      setCanvasDimensions({ width: newWidth, height: newHeight });
-
-      // Update canvas hardware pixels
-      const dpr = window.devicePixelRatio || 1;
-      canvasRef.current.width = Math.round(newWidth * dpr);
-      canvasRef.current.height = Math.round(newHeight * dpr);
-
-      // If we have a system, update its config
-      if (systemRef.current) {
-        systemRef.current.config.canvasWidth = newWidth;
-        systemRef.current.config.canvasHeight = newHeight;
-
-        // Force camera update when container dimensions change
-        if (systemRef.current.bodies.length > 0) {
-          // Set a timeout to allow the state to update first
-          setTimeout(() => {
-            // Reset camera position to better fit the new dimensions
-            if (cameraRef.current.autoFollow) {
-              updateCamera(systemRef.current!.bodies);
-            } else {
-              // Even if not auto-following, recenter in the new container
-              const center = calculateBoundingBox(systemRef.current!.bodies);
-              cameraRef.current.x = newWidth / 2 - center.centerX * cameraRef.current.zoom;
-              cameraRef.current.y = newHeight / 2 - center.centerY * cameraRef.current.zoom;
-            }
-          }, 0);
-        }
+    const canvas = canvasRef.current!;
+    const container = containerRef.current!;
+    const bounds = container.getBoundingClientRect();
+    const system = new ThreeBodySystem({
+      G: 1000, dt: 0.03, speedMultiplier: 1, useAdaptiveTimeStep: true,
+      maxPositionChangeRatio: 0.01, canvasWidth: bounds.width || width,
+      canvasHeight: bounds.height || height, maxTrailLength: 500,
+      minMass: 1.75, maxMass: 3.75, minVelocity: -50, maxVelocity: 50,
+      numBodies: 3, ...initialConfig.current,
+    });
+    systemRef.current = system;
+    let view: SpaceRenderer;
+    try {
+      view = new SpaceRenderer(canvas, () => { setFollowing(false); setOrbiting(false); });
+    } catch (err) {
+      console.error('Unable to initialize 3D rendering', err);
+      setError('This view needs WebGL 2. Try a browser with hardware acceleration enabled.');
+      system.pause();
+      setRunning(false);
+      return;
+    }
+    rendererRef.current = view;
+    system.start();
+    setRunning(true);
+    view.setOrbiting(!window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      view.resize(rect.width, rect.height);
+      system.config.canvasWidth = rect.width;
+      system.config.canvasHeight = rect.height;
+    };
+    resize();
+    view.fit(system.bodies, true);
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      system.pause();
+      setRunning(false);
+      setError('The graphics context was lost. Reload to restore the 3D view.');
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.startsWith('Arrow')) {
+        view.setFollowing(false);
+        view.setOrbiting(false);
+        setFollowing(false);
+        setOrbiting(false);
+      }
+      if (event.key === 'Home') {
+        event.preventDefault();
+        view.fit(system.bodies, true);
+        view.setFollowing(true);
+        setFollowing(true);
       }
     };
-
-    // Initial size update
-    updateCanvasSize();
-
-    // Set up resize observer
-    const resizeObserver = new ResizeObserver(() => {
-      updateCanvasSize();
-    });
-
-    resizeObserver.observe(containerRef.current);
-
-    // Clean up
+    canvas.addEventListener('webglcontextlost', onContextLost);
+    canvas.addEventListener('keydown', onKey);
+    let frame = 0, previous: number | null = null, lastUI = 0, fpsStart = 0, frames = 0, fps = 0;
+    const render = (timestamp: number) => {
+      frame = requestAnimationFrame(render);
+      if (document.hidden) { previous = null; return; }
+      // Cap drawing at 60 fps rather than consuming the GPU at the monitor's maximum refresh rate.
+      if (previous !== null && timestamp - previous < 1000 / 60 - 0.5) return;
+      const delta = previous === null ? 0 : Math.min(0.05, (timestamp - previous) / 1000);
+      previous = timestamp;
+      if (system.isRunning()) system.update(delta * 1.8 * system.config.speedMultiplier);
+      const diagnostics = system.getDiagnostics();
+      view.render(system.bodies, diagnostics.time, delta);
+      frames++;
+      if (timestamp - fpsStart >= 1000) {
+        fps = Math.round(frames * 1000 / (timestamp - fpsStart));
+        frames = 0;
+        fpsStart = timestamp;
+      }
+      if (timestamp - lastUI >= 200) {
+        setStats({ diagnostics, fps, step: system.getEffectiveTimeStep() });
+        setRunning(system.isRunning());
+        lastUI = timestamp;
+      }
+    };
+    frame = requestAnimationFrame(render);
     return () => {
-      resizeObserver.disconnect();
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('keydown', onKey);
+      view.dispose();
+      rendererRef.current = null;
+      systemRef.current = null;
     };
   }, []);
 
-  // Initialize the system on mount
   useEffect(() => {
-    // Default configuration with reasonable values
-    const defaultConfig: ThreeBodyConfig = {
-      G: 1000, // Gravitational constant
-      dt: 0.03, // Time step
-      speedMultiplier: 1.0, // Speed multiplier
-      useAdaptiveTimeStep: true, // Enable adaptive time stepping
-      maxPositionChangeRatio: 0.01, // Max position change ratio
-      canvasWidth: canvasDimensions.width,
-      canvasHeight: canvasDimensions.height,
-      maxTrailLength: 500, // Long trail length
-      minMass: 1.75,
-      maxMass: 3.75,
-      minVelocity: -50,
-      maxVelocity: 50,
-      numBodies: 3, // Default to 3 bodies
-    };
-
-    // Merge with any provided config options
-    const mergedConfig = { ...defaultConfig, ...config };
-
-    // Create the system
-    systemRef.current = new ThreeBodySystem(mergedConfig);
-    systemRef.current.start(); // Start the simulation
-    setIsRunning(true);
-
-    // Reset timing variables
-    frameTimeRef.current = performance.now();
-    lastTimestampRef.current = null;
-    frameCountRef.current = 0;
-
-    // Clean up the previous animation frame if it exists
-    if (animationFrameRef.current !== null) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
+    const system = systemRef.current;
+    if (!system) return;
+    const previousCount = system.bodies.length;
+    if (config.numBodies !== undefined) system.setNumBodies(config.numBodies);
+    for (const key of ['G', 'dt', 'maxTrailLength', 'maxPositionChangeRatio'] as const) {
+      if (config[key] !== undefined) system.config[key] = config[key];
     }
-
-    // Clean up previous interval if it exists
-    if (updateIntervalRef.current !== null) {
-      clearInterval(updateIntervalRef.current);
-      updateIntervalRef.current = null;
+    if (config.speedMultiplier !== undefined) system.setSpeedMultiplier(config.speedMultiplier);
+    if (config.useAdaptiveTimeStep !== undefined) system.setAdaptiveTimeStep(config.useAdaptiveTimeStep);
+    if (previousCount !== system.bodies.length) {
+      rendererRef.current?.fit(system.bodies, true);
+      setStats(null);
+      setFollowing(true);
     }
-
-    // Ensure the camera is initialized to the center position
-    const containerRect = containerRef.current?.getBoundingClientRect();
-    if (containerRect) {
-      cameraRef.current = {
-        x: containerRect.width / 2,
-        y: containerRect.height / 2,
-        zoom: 1,
-        autoFollow: true,
-      };
-      setCamera(cameraRef.current);
-    }
-
-    // Refresh the DOM readout without tying it to the animation frame rate.
-    updateIntervalRef.current = window.setInterval(() => {
-      // Copy from refs to state to ensure React renders
-      setCamera({ ...cameraRef.current });
-      if (systemRef.current) {
-        setDiagnostics(systemRef.current.getDiagnostics());
-        setIsRunning(systemRef.current.isRunning());
-      }
-    }, 200); // Physics and rendering run separately from the DOM readout.
-
-    // Start the animation loop
-    startAnimation();
-
-    // Cleanup on unmount
-    return () => {
-      if (animationFrameRef.current !== null) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-
-      if (updateIntervalRef.current !== null) {
-        clearInterval(updateIntervalRef.current);
-        updateIntervalRef.current = null;
-      }
-    };
-  }, []); // Only run once on mount
-
-  // Handle config changes separately
+  }, [config]);
+  useEffect(() => { rendererRef.current?.setFollowing(following); }, [following]);
+  useEffect(() => { rendererRef.current?.setOrbiting(orbiting); }, [orbiting]);
+  useEffect(() => { rendererRef.current?.setGrid(grid); }, [grid]);
+  useEffect(() => { rendererRef.current?.setBloom(glow); }, [glow]);
   useEffect(() => {
-    if (!systemRef.current) return;
-
-    // Update number of bodies if changed
-    if (config.numBodies !== undefined && systemRef.current.bodies.length !== config.numBodies) {
-      systemRef.current.setNumBodies(config.numBodies);
-      if (onReset) onReset();
-
-      // Reset camera on body count change
-      cameraRef.current = {
-        x: 0,
-        y: 0,
-        zoom: 1,
-        autoFollow: true,
-      };
-      setCamera(cameraRef.current);
-    }
-
-    // Update other configurable properties
-    if (config.G !== undefined) {
-      systemRef.current.config.G = config.G;
-    }
-
-    if (config.dt !== undefined) {
-      systemRef.current.config.dt = config.dt;
-    }
-
-    if (config.maxTrailLength !== undefined) {
-      systemRef.current.config.maxTrailLength = config.maxTrailLength;
-    }
-
-    // Update speed multiplier
-    if (config.speedMultiplier !== undefined) {
-      systemRef.current.setSpeedMultiplier(config.speedMultiplier);
-    }
-
-    // Update adaptive time stepping
-    if (config.useAdaptiveTimeStep !== undefined) {
-      systemRef.current.setAdaptiveTimeStep(config.useAdaptiveTimeStep);
-    }
-
-    // Update position change ratio if it exists
-    if (config.maxPositionChangeRatio !== undefined) {
-      systemRef.current.config.maxPositionChangeRatio = config.maxPositionChangeRatio;
-    }
-  }, [config, onReset]);
-
-  // Sync the showGridRef with showGrid state
-  useEffect(() => {
-    showGridRef.current = showGrid;
-  }, [showGrid]);
-
-  /**
-   * Start the animation loop
-   */
-  const startAnimation = (): void => {
-    // Force an initial camera position update once bodies are initialized
-    if (systemRef.current && systemRef.current.bodies.length > 0) {
-      // Get container dimensions
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setCanvasDimensions({ width: rect.width, height: rect.height });
-      }
-
-      // Initialize camera position to center on bodies
-      updateCamera(systemRef.current.bodies);
-    }
-
-    // Define the render function for animation
-    const renderFrame = (timestamp: number): void => {
-      // Check if canvas and system are available
-      if (!canvasRef.current || !systemRef.current) {
-        console.warn('Canvas or system not available, skipping frame');
-        animationFrameRef.current = requestAnimationFrame(renderFrame);
-        return;
-      }
-
-      // Discard long gaps (background tabs, pause) rather than taking a huge catch-up step.
-      const previous = lastTimestampRef.current;
-      lastTimestampRef.current = timestamp;
-      const seconds = previous === null ? 0 : Math.min(0.05, (timestamp - previous) / 1000);
-      if (systemRef.current.isRunning() && !document.hidden) {
-        systemRef.current.update(seconds * 1.8 * systemRef.current.config.speedMultiplier);
-      }
-
-      // Calculate FPS
-      frameCountRef.current++;
-      const elapsed = timestamp - frameTimeRef.current;
-
-      if (elapsed >= 1000) {
-        // Calculate and update FPS once per second
-        const newFps = Math.round((frameCountRef.current * 1000) / elapsed);
-        fpsRef.current = newFps;
-
-        frameCountRef.current = 0;
-        frameTimeRef.current = timestamp;
-      }
-
-      // Update camera position if auto-follow is enabled
-      updateCamera(systemRef.current.bodies);
-
-      // Render the current state
-      renderSystem();
-
-      // Continue the animation loop
-      animationFrameRef.current = requestAnimationFrame(renderFrame);
-    };
-
-    // Start the animation loop
-    if (animationFrameRef.current === null) {
-      animationFrameRef.current = requestAnimationFrame(renderFrame);
-    }
-  };
-
-  /**
-   * Render the current state of the system to the canvas
-   */
-  const renderSystem = (): void => {
-    if (!canvasRef.current || !systemRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    const dpr = window.devicePixelRatio || 1;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    // Clear the canvas
-    ctx.fillStyle = '#121212'; // Dark background
-    ctx.fillRect(0, 0, width, height);
-
-    // Save the untransformed context
-    ctx.save();
-
-    // Get current camera values from ref for rendering
-    const currentCamera = cameraRef.current;
-
-    // Apply camera transformation
-    ctx.translate(currentCamera.x, currentCamera.y);
-    ctx.scale(currentCamera.zoom, currentCamera.zoom);
-
-    // Draw grid lines if enabled - use the ref for most up-to-date value
-    if (showGridRef.current) {
-      // Choose a screen-sized spacing so escaped bodies never produce millions of lines.
-      const desired = 60 / currentCamera.zoom;
-      const magnitude = 10 ** Math.floor(Math.log10(desired));
-      const gridSize = Math.ceil(desired / magnitude) * magnitude;
-      const gridOffsetX = Math.floor(-currentCamera.x / currentCamera.zoom / gridSize) * gridSize;
-      const gridOffsetY = Math.floor(-currentCamera.y / currentCamera.zoom / gridSize) * gridSize;
-      const gridCountX = Math.ceil(width / currentCamera.zoom / gridSize) + 2;
-      const gridCountY = Math.ceil(height / currentCamera.zoom / gridSize) + 2;
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.065)';
-      ctx.lineWidth = 1 / currentCamera.zoom; // Maintain constant visual thickness
-
-      // Draw horizontal grid lines
-      for (let i = 0; i < gridCountY; i++) {
-        const y = gridOffsetY + i * gridSize;
-        ctx.beginPath();
-        ctx.moveTo(gridOffsetX, y);
-        ctx.lineTo(gridOffsetX + gridCountX * gridSize, y);
-        ctx.stroke();
-      }
-
-      // Draw vertical grid lines
-      for (let i = 0; i < gridCountX; i++) {
-        const x = gridOffsetX + i * gridSize;
-        ctx.beginPath();
-        ctx.moveTo(x, gridOffsetY);
-        ctx.lineTo(x, gridOffsetY + gridCountY * gridSize);
-        ctx.stroke();
-      }
-    }
-
-    // Draw the bodies and their trails
-    systemRef.current.bodies.forEach((body) => {
-      const [x, y] = body.position;
-      const radius = body.radius;
-
-      // Draw trail
-      if (body.trail.length > 1) {
-        ctx.beginPath();
-        ctx.moveTo(body.trail[0][0], body.trail[0][1]);
-
-        for (let i = 1; i < body.trail.length; i++) {
-          ctx.lineTo(body.trail[i][0], body.trail[i][1]);
-        }
-
-        // Gradient trail with transparency
-        const gradient = ctx.createLinearGradient(
-          body.trail[0][0],
-          body.trail[0][1],
-          body.trail[body.trail.length - 1][0],
-          body.trail[body.trail.length - 1][1]
-        );
-
-        gradient.addColorStop(0, `${body.color}00`); // Transparent at start
-        gradient.addColorStop(1, `${body.color}99`); // More opaque at end
-
-        ctx.strokeStyle = gradient;
-        ctx.lineWidth = Math.max(1 / currentCamera.zoom, radius * 0.12);
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
-        ctx.stroke();
-      }
-
-      // Draw the body
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-
-      // Radial gradient for body
-      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
-      gradient.addColorStop(0, '#FFFFFF'); // White center
-      gradient.addColorStop(0.3, body.color); // Main color
-      gradient.addColorStop(1, `${body.color}00`); // Transparent edge
-
-      ctx.fillStyle = gradient;
-      ctx.fill();
-
-      // Add glow effect
-      ctx.beginPath();
-      ctx.arc(x, y, radius * 1.5, 0, Math.PI * 2);
-      const glowGradient = ctx.createRadialGradient(x, y, radius, x, y, radius * 1.5);
-      glowGradient.addColorStop(0, `${body.color}33`); // Semi-transparent
-      glowGradient.addColorStop(1, `${body.color}00`); // Transparent
-
-      ctx.fillStyle = glowGradient;
-      ctx.fill();
-    });
-
-    // Restore original transformation
-    ctx.restore();
-  };
-
-  /**
-   * Reset the simulation with new random initial conditions
-   */
-  const handleReset = (): void => {
-    if (systemRef.current) {
-      systemRef.current.reset();
-      setDiagnostics(systemRef.current.getDiagnostics());
-      lastTimestampRef.current = null;
-
-      // Reset camera on simulation reset
-      cameraRef.current = {
-        x: 0,
-        y: 0,
-        zoom: 1,
-        autoFollow: true,
-      };
-      setCamera(cameraRef.current);
-
-      if (onReset) onReset();
-    }
-  };
-
-  /**
-   * Toggle pause/play simulation
-   */
-  const handlePlayPause = (): void => {
-    if (systemRef.current) {
-      lastTimestampRef.current = null;
-      systemRef.current.toggleRunning();
-      setIsRunning(systemRef.current.isRunning());
-    }
-  };
-
-  /**
-   * Toggle auto-follow camera mode
-   */
-  const toggleAutoFollow = (): void => {
-    cameraRef.current = {
-      ...cameraRef.current,
-      autoFollow: !cameraRef.current.autoFollow,
-    };
-    setCamera(cameraRef.current);
-  };
-
-  /**
-   * Toggle grid visibility
-   */
-  const toggleGrid = (): void => {
-    const newValue = !showGridRef.current;
-    showGridRef.current = newValue; // Update ref immediately for rendering
-    setShowGrid(newValue); // Update state for UI
-  };
-
-  // Mouse event handlers for manual camera control
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>): void => {
-    // Use left click for dragging (more intuitive)
-    e.preventDefault();
-
-    dragRef.current = {
-      isDragging: true,
-      lastX: e.clientX,
-      lastY: e.clientY,
-    };
-
-    // Disable auto-follow when user starts dragging
-    if (cameraRef.current.autoFollow) {
-      cameraRef.current = {
-        ...cameraRef.current,
-        autoFollow: false,
-      };
-      setCamera(cameraRef.current);
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (dragRef.current.isDragging) {
-      const dx = e.clientX - dragRef.current.lastX;
-      const dy = e.clientY - dragRef.current.lastY;
-
-      // Update camera ref directly
-      cameraRef.current = {
-        ...cameraRef.current,
-        x: cameraRef.current.x + dx,
-        y: cameraRef.current.y + dy,
-        autoFollow: false, // Ensure auto-follow is disabled during drag
-      };
-
-      // Update last positions
-      dragRef.current.lastX = e.clientX;
-      dragRef.current.lastY = e.clientY;
-
-      // No need to call setCamera here, the interval will handle it
-    }
-  };
-
-  const handleMouseUp = (): void => {
-    dragRef.current.isDragging = false;
-  };
-
-  const handleMouseLeave = (): void => {
-    dragRef.current.isDragging = false;
-  };
-
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>): void => {
-    e.preventDefault();
-
-    // Disable auto-follow when user starts zooming
-    if (cameraRef.current.autoFollow) {
-      cameraRef.current = {
-        ...cameraRef.current,
-        autoFollow: false,
-      };
-      setCamera(cameraRef.current);
-    }
-
-    const zoomFactor = 0.1;
-    const delta = e.deltaY > 0 ? -zoomFactor : zoomFactor;
-
-    // Calculate zoom center point (mouse position)
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    // Update camera ref directly
-    const prevCamera = cameraRef.current;
-    const newZoom = Math.max(0.1, Math.min(5, prevCamera.zoom * (1 + delta)));
-
-    // Adjust position to zoom toward mouse
-    const zoomRatio = newZoom / prevCamera.zoom;
-    const newX = mouseX - (mouseX - prevCamera.x) * zoomRatio;
-    const newY = mouseY - (mouseY - prevCamera.y) * zoomRatio;
-
-    cameraRef.current = {
-      x: newX,
-      y: newY,
-      zoom: newZoom,
-      autoFollow: false,
-    };
-  };
-
-  /**
-   * Toggle fullscreen mode
-   */
-  const toggleFullscreen = (): void => {
-    if (!containerRef.current) return;
-
-    if (!document.fullscreenElement) {
-      containerRef.current
-        .requestFullscreen()
-        .then(() => {
-          setIsFullscreen(true);
-        })
-        .catch((err) => {
-          console.error(`Error attempting to enable fullscreen: ${err.message}`);
-        });
-    } else {
-      document
-        .exitFullscreen()
-        .then(() => {
-          setIsFullscreen(false);
-        })
-        .catch((err) => {
-          console.error(`Error attempting to exit fullscreen: ${err.message}`);
-        });
-    }
-  };
-
-  // Handle fullscreen changes
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      const isFullscreenNow = !!document.fullscreenElement;
-      setIsFullscreen(isFullscreenNow);
-
-      // Force immediate camera update when fullscreen state changes
-      if (containerRef.current && systemRef.current && systemRef.current.bodies.length > 0) {
-        // Get the new container dimensions
-        const containerRect = containerRef.current.getBoundingClientRect();
-        const newWidth = containerRect.width;
-        const newHeight = containerRect.height;
-
-        // Update canvas dimensions in the system
-        if (systemRef.current) {
-          systemRef.current.config.canvasWidth = newWidth;
-          systemRef.current.config.canvasHeight = newHeight;
-        }
-
-        // Reset canvasDimensions to ensure calculations use correct values
-        setCanvasDimensions({ width: newWidth, height: newHeight });
-
-        // Force a camera reset to properly center the view
-        setTimeout(() => {
-          // If auto-follow was already on, ensure it properly recalculates with new dimensions
-          if (cameraRef.current.autoFollow) {
-            updateCamera(systemRef.current!.bodies);
-          } else {
-            // If not auto-following, at least center the view with the new dimensions
-            const bounds = calculateBoundingBox(systemRef.current!.bodies);
-            cameraRef.current.x = newWidth / 2 - bounds.centerX * cameraRef.current.zoom;
-            cameraRef.current.y = newHeight / 2 - bounds.centerY * cameraRef.current.zoom;
-            // Update the React state for immediate UI update
-            setCamera({ ...cameraRef.current });
-          }
-        }, 50); // Small delay to ensure dimensions are updated
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-    };
+    const changed = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener('fullscreenchange', changed);
+    return () => document.removeEventListener('fullscreenchange', changed);
   }, []);
+
+  const reset = () => {
+    const system = systemRef.current;
+    if (!system) return;
+    const wasWarning = Boolean(system.getDiagnostics().warning);
+    system.reset();
+    if (wasWarning) { system.start(); setRunning(true); }
+    setStats(null);
+    setFollowing(true);
+    rendererRef.current?.setFollowing(true);
+    rendererRef.current?.fit(system.bodies, true);
+    onReset?.();
+  };
+  const toggleRunning = () => {
+    systemRef.current?.toggleRunning();
+    setRunning(systemRef.current?.isRunning() ?? false);
+  };
+  const frameAll = () => {
+    setFollowing(true);
+    rendererRef.current?.setFollowing(true);
+    rendererRef.current?.fit(systemRef.current?.bodies ?? []);
+  };
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await containerRef.current?.requestFullscreen();
+    } catch { setNotice('Fullscreen is unavailable in this browser. You can keep using the 3D view here.'); }
+  };
+  const diagnostics = stats?.diagnostics;
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: '100%',
-        overflow: 'hidden',
-        background: '#121212',
-      }}
-    >
-      <div className='simulation-readout' aria-live='off'>
-        <span>{camera.autoFollow ? 'Auto-follow' : 'Manual camera'} · {Math.round(camera.zoom * 100)}% · {fpsRef.current} fps</span>
-        <span>t = {(diagnostics?.time ?? 0).toFixed(2)} · step {systemRef.current?.getEffectiveTimeStep().toExponential(1) ?? '—'}</span>
-        <span title='Change in total energy, normalized by initial kinetic plus absolute potential energy.'>Energy drift: {((diagnostics?.energyError ?? 0) * 100).toExponential(1)}%</span>
-        <span className='solver-label'>Error control active · Newtonian gravity</span>
+    <div className='space-stage' ref={containerRef}>
+      <canvas ref={canvasRef} tabIndex={0}
+        aria-label='Interactive 3D gravity simulation. Drag to orbit, scroll to zoom, right-drag to pan. Arrow keys pan; Home resets the camera.' />
+      <div className='space-vignette' />
+      <div className='scene-heading'>
+        <span className={`live-dot ${running ? '' : 'paused'}`} />
+        <span>{running ? 'LIVE SIMULATION' : 'PAUSED'}</span>
+        <span className='dimension-badge'>3D</span>
       </div>
-      {(diagnostics?.warning || diagnostics?.slowed) && (
+      <div className='scene-hint'>DRAG TO ORBIT <span>/</span> SCROLL TO ZOOM</div>
+      <div className='space-stats'>
+        <span><b>{(diagnostics?.time ?? 0).toFixed(2)}</b> SIM TIME</span>
+        <span title='Change in total energy, normalized by initial kinetic plus absolute potential energy.'>
+          <b>{((diagnostics?.energyError ?? 0) * 100).toExponential(1)}%</b> ENERGY DRIFT
+        </span>
+        <span className='performance-stat'><b>{stats?.fps ?? 0}</b> FPS</span>
+      </div>
+      <div className='body-legend' aria-label='Body colors'>
+        {systemRef.current?.bodies.map((body, i) => (
+          <span key={i}><i style={{ background: body.color, boxShadow: `0 0 9px ${body.color}` }} />{i + 1}</span>
+        ))}
+      </div>
+      {(diagnostics?.warning || diagnostics?.slowed || notice) && (
         <div className='simulation-notice' role='status'>
-          {diagnostics.warning ?? 'Resolving close encounter — playback slowed to preserve accuracy.'}
+          {diagnostics?.warning ?? notice ?? 'Resolving close encounter - playback slowed to preserve accuracy.'}
         </div>
       )}
-      <canvas
-        aria-label='Animated gravitational bodies and their orbital trails. Drag to pan; scroll to zoom.'
-        ref={canvasRef}
-        style={{
-          display: 'block',
-          cursor: dragRef.current.isDragging ? 'grabbing' : 'grab',
-          width: '100%',
-          height: '100%',
-        }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        onWheel={handleWheel}
-        onContextMenu={(e) => e.preventDefault()} // Prevent context menu on right click
-      />
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '10px',
-          left: '10px',
-          display: 'flex',
-          gap: '6px',
-          flexWrap: 'wrap',
-          right: '10px',
-        }}
-      >
-        <button
-          onClick={handlePlayPause}
-          style={{
-            background: '#444',
-            color: 'white',
-            border: 'none',
-            padding: '8px 12px',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          {isRunning ? <PauseIcon fontSize='small' /> : <PlayArrowIcon fontSize='small' />}
-          {isRunning ? 'Pause' : 'Play'}
+      {error && <div className='graphics-error' role='alert'><strong>Graphics notice</strong><p>{error}</p>
+        <button onClick={() => window.location.reload()}>Reload</button></div>}
+      {!error && <div className='space-toolbar'>
+        <button className='primary-control' onClick={toggleRunning} title='Pause or resume the physics'>
+          {running ? <PauseIcon fontSize='small' /> : <PlayArrowIcon fontSize='small' />}{running ? 'Pause' : 'Play'}
         </button>
-        <button
-          onClick={handleReset}
-          style={{
-            background: '#444',
-            color: 'white',
-            border: 'none',
-            padding: '8px 12px',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          <RestartAltIcon fontSize='small' />
-          Reset
+        <button onClick={reset} title='Create a new random 3D system'><RestartAltIcon fontSize='small' />Reset</button>
+        <span className='toolbar-separator' />
+        <button onClick={frameAll} aria-pressed={following} title='Fit all bodies and trails, and follow the system'>
+          <CenterFocusStrongIcon fontSize='small' />Frame all
         </button>
-        <button
-          onClick={toggleAutoFollow}
-          style={{
-            background: camera.autoFollow ? '#4CAF50' : '#444',
-            color: 'white',
-            border: 'none',
-            padding: '8px 12px',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          <CenterFocusStrongIcon fontSize='small' />
-          Auto-Follow
+        <button onClick={() => setOrbiting(!orbiting)} aria-pressed={orbiting} title='Slowly orbit the camera automatically'>
+          <ThreeSixtyIcon fontSize='small' />Auto-orbit
         </button>
-        <button
-          onClick={toggleGrid}
-          style={{
-            background: showGrid ? '#8E24AA' : '#444',
-            color: 'white',
-            border: 'none',
-            padding: '8px 12px',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          {showGrid ? <GridOnIcon fontSize='small' /> : <GridOffIcon fontSize='small' />}
-          Grid
+        <button onClick={() => setGrid(!grid)} aria-pressed={grid} title='Toggle the reference grid'>
+          <GridOnIcon fontSize='small' /><span className='optional-label'>Grid</span>
         </button>
-        <button
-          onClick={toggleFullscreen}
-          style={{
-            background: isFullscreen ? '#2196F3' : '#444',
-            color: 'white',
-            border: 'none',
-            padding: '8px 12px',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          {isFullscreen ? <FullscreenExitIcon fontSize='small' /> : <FullscreenIcon fontSize='small' />}
-          {isFullscreen ? 'Exit' : 'Fullscreen'}
+        <button onClick={() => setGlow(!glow)} aria-pressed={glow} title='Toggle bloom glow'>
+          <AutoAwesomeIcon fontSize='small' /><span className='optional-label'>Glow</span>
         </button>
-      </div>
+        <button className='fullscreen-control' onClick={toggleFullscreen}
+          aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+          {fullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+        </button>
+      </div>}
     </div>
   );
-};
-
-export default ThreeBodyCanvas;
+}
